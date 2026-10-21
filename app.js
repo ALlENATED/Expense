@@ -307,7 +307,6 @@ function daysUntil(iso) {
   return Math.round((d - t) / 86400000);
 }
 
-/* DD/MM/YYYY <-> YYYY-MM-DD */
 function ddmmyyyyToISO(str) {
   if (!str) return '';
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(str.trim());
@@ -316,7 +315,7 @@ function ddmmyyyyToISO(str) {
   if (mm < 1 || mm > 12) return '';
   if (dd < 1 || dd > 31) return '';
   const d = new Date(yy, mm - 1, dd);
-  if (d.getMonth() !== mm - 1 || d.getDate() !== dd) return ''; // caught 31/02
+  if (d.getMonth() !== mm - 1 || d.getDate() !== dd) return '';
   return yy + '-' + pad2(mm) + '-' + pad2(dd);
 }
 function isoToDDMMYYYY(iso) {
@@ -663,8 +662,9 @@ ScreenRenderers.categories = function () {
       const limit = Number(cat.limit) || 0;
       const over  = limit > 0 && spent > limit;
       const pct   = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-      const left  = limit - spent;
       const isPinned = Number(cat.pinOrder) > 0;
+      
+      const pinHtml = isPinned ? '<span class="pin-pill">📌</span>' : '';
 
       const card = document.createElement('div');
       card.className = 'cat c-' + (cat.colorKey || 'blue') + (over ? ' over' : '');
@@ -674,15 +674,14 @@ ScreenRenderers.categories = function () {
           '<div class="cat-top">' +
             '<div class="cat-name-wrap">' +
               '<span class="cat-name">' + esc(cat.name) + '</span>' +
-              (isPinned ? '<span class="pin-pill">📌</span>' : '') +
+              pinHtml +
             '</div>' +
-            '<span class="cat-amt"><b>' + fmtAmount(spent) + '</b> / ' + fmtAmount(limit) + '</span>' +
+            '<div class="cat-right">' +
+              '<span class="cat-amt"><b>' + fmtAmount(spent) + '</b> / ' + fmtAmount(limit) + '</span>' +
+              '<span class="cat-pct-pill">' + pct + '%</span>' +
+            '</div>' +
           '</div>' +
           '<div class="cat-bar"><div style="width:' + Math.min(100, pct) + '%"></div></div>' +
-          '<div class="cat-foot">' +
-            '<span class="cat-left">' + (over ? '−' + fmtAmount(-left) + ' over' : fmtAmount(left) + ' left') + '</span>' +
-            '<span class="cat-pct">' + pct + '%</span>' +
-          '</div>' +
         '</div>';
       card.onclick = () => openCategoryEditor(cat);
       wrap.appendChild(card);
@@ -966,7 +965,6 @@ ScreenRenderers.settings = function () {
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Tune things,', 'Settings'));
 
-  // Profile
   wrap.appendChild(sectionTitle('Profile'));
   const pg = group();
   const arow = document.createElement('div');
@@ -985,7 +983,6 @@ ScreenRenderers.settings = function () {
   pg.appendChild(arow);
   wrap.appendChild(pg);
 
-  // General
   wrap.appendChild(sectionTitle('General'));
   const g = group();
   g.appendChild(rowInput('App name', 'set-appname', s.appName || ''));
@@ -993,7 +990,6 @@ ScreenRenderers.settings = function () {
   g.appendChild(rowInput('Total budget', 'set-budget', s.totalBudget || 0));
   wrap.appendChild(g);
 
-  // Reset
   wrap.appendChild(sectionTitle('Reset'));
   const reset = group();
   reset.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
@@ -1015,7 +1011,6 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(reset);
   wrap.appendChild(hint('Period start day = when each budget period begins. To Pay reset day = when subscriptions and repeats roll forward.'));
 
-  // Appearance
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
   const themeRow = document.createElement('div');
@@ -1043,7 +1038,6 @@ ScreenRenderers.settings = function () {
   appear.appendChild(toneRow);
   wrap.appendChild(appear);
 
-  // Categories
   wrap.appendChild(sectionTitle('Categories', parents.length + ' of unlimited'));
   const cats = group();
   parents.forEach(c => {
@@ -1062,7 +1056,6 @@ ScreenRenderers.settings = function () {
   cats.appendChild(addCat);
   wrap.appendChild(cats);
 
-  // Account
   wrap.appendChild(sectionTitle('Account'));
   const acct = group();
   const emailRow = document.createElement('div');
@@ -1114,7 +1107,6 @@ function bindInput(id, onCommit) {
   el.addEventListener('keydown', ev => { if (ev.key === 'Enter') el.blur(); });
 }
 
-/* Save setting AND refresh the current period's History row budget. */
 function saveSetting(key, value) {
   const merged = Object.assign({}, App.settings || DEFAULT_SETTINGS);
   merged[key] = value;
@@ -1135,7 +1127,7 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- 15. sync history budget for current period ---------- */
+/* ---------- 15. sync history budget ---------- */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -1729,45 +1721,37 @@ function buildIconPicker(container, current, onPick) {
   render('');
 }
 
-/* ---------- 22. tone picker (35 tones, ordered by hue) ---------- */
+/* ---------- 22. tone picker ---------- */
 const TONES = [
-  // Yellows / Oranges
   { key: 'sunset',      name: 'Sunset',       a: '#ff512f', b: '#f09819' },
   { key: 'ambersky',    name: 'Amber Sky',    a: '#f12711', b: '#f5af19' },
   { key: 'coral',       name: 'Coral',        a: '#ff6b6b', b: '#ee5a24' },
   { key: 'cherry',      name: 'Cherry',       a: '#eb3349', b: '#f45c43' },
   { key: 'fire',        name: 'Fire',         a: '#cb2d3e', b: '#ef473a' },
   { key: 'sunrise',     name: 'Sunrise',      a: '#ff9966', b: '#ff5e62' },
-  // Reds
   { key: 'blood',       name: 'Blood',        a: '#870000', b: '#190a05' },
   { key: 'rose',        name: 'Rose',         a: '#c9184a', b: '#ff8fab' },
   { key: 'grape',       name: 'Grape',        a: '#5f0f40', b: '#9a031e' },
   { key: 'plumfire',    name: 'Plum Fire',    a: '#4b134f', b: '#c94b4b' },
   { key: 'indigosun',   name: 'Indigo Sun',   a: '#1a2a6c', b: '#b21f1f' },
-  // Pinks
   { key: 'lava',        name: 'Lava',         a: '#ff512f', b: '#dd2476' },
   { key: 'rosegold',    name: 'Rose Gold',    a: '#b24592', b: '#f15f79' },
   { key: 'twilight',    name: 'Twilight',     a: '#3a1c71', b: '#d76d77' },
   { key: 'berry',       name: 'Berry',        a: '#6a0572', b: '#ab83a1' },
-  // Purples
   { key: 'cosmic',      name: 'Cosmic',       a: '#ff00cc', b: '#333399' },
   { key: 'electric',    name: 'Electric',     a: '#4776e6', b: '#8e54e9' },
   { key: 'nebula',      name: 'Nebula',       a: '#8e2de2', b: '#4a00e0' },
   { key: 'berrywine',   name: 'Berry Wine',   a: '#41295a', b: '#2f0743' },
   { key: 'midnight',    name: 'Midnight',     a: '#1a1a2e', b: '#3b2f6b' },
-  // Blues
   { key: 'ocean',       name: 'Ocean',        a: '#0a84ff', b: '#5b4bff' },
   { key: 'midnightsea', name: 'Midnight Sea', a: '#141e30', b: '#243b55' },
   { key: 'aurora',      name: 'Aurora',       a: '#00b4db', b: '#0083b0' },
-  // Teals
   { key: 'tealnight',   name: 'Teal Night',   a: '#0f2027', b: '#2c5364' },
   { key: 'deepsea',     name: 'Deep Sea',     a: '#2c3e50', b: '#4ca1af' },
   { key: 'emerald',     name: 'Emerald',      a: '#0f766e', b: '#14b8a6' },
   { key: 'mint',        name: 'Mint',         a: '#009688', b: '#7fdbca' },
   { key: 'jungle',      name: 'Jungle',       a: '#134e5e', b: '#71b280' },
-  // Greens
   { key: 'forest',      name: 'Forest',       a: '#1b4332', b: '#40916c' },
-  // Neutrals
   { key: 'steel',       name: 'Steel',        a: '#485563', b: '#29323c' },
   { key: 'graphite',    name: 'Graphite',     a: '#2b2d42', b: '#4a4e69' },
   { key: 'slate',       name: 'Slate',        a: '#33415c', b: '#5c6b8a' },
@@ -1899,12 +1883,12 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ---------- 24. To Pay editor (DD/MM/YYYY date input) ---------- */
+/* ---------- 24. To Pay editor ---------- */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
     name: '', amount: null,
-    dueDate: localDateString(new Date()),  // stored as YYYY-MM-DD
+    dueDate: localDateString(new Date()),
     paid: false, paidDate: null,
     isSubscription: false, isRepeat: false, repeatUntil: '',
   };
@@ -1927,7 +1911,6 @@ function openToPayEditor(item) {
       (item.amount != null ? item.amount : '') + '" placeholder="Optional">';
     body.appendChild(amtF);
 
-    // DD/MM/YYYY text input — no browser month-first
     const dueF = document.createElement('div');
     dueF.className = 'field';
     dueF.innerHTML = '<label>Due date</label>' +
@@ -1937,7 +1920,6 @@ function openToPayEditor(item) {
     const dueInput = dueF.querySelector('#tp-due');
     dueInput.addEventListener('input', () => autoSlashDate(dueInput));
 
-    // Type
     const typeF = document.createElement('div');
     typeF.className = 'field';
     typeF.innerHTML = '<label>Type</label>';
@@ -1958,7 +1940,6 @@ function openToPayEditor(item) {
     typeF.appendChild(seg);
     body.appendChild(typeF);
 
-    // Repeat until (also DD/MM/YYYY)
     const repeatEndF = document.createElement('div');
     repeatEndF.className = 'field';
     repeatEndF.style.display = (type === 'repeat') ? 'flex' : 'none';
