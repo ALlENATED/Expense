@@ -1,7 +1,4 @@
-/* app.js — full app logic.
-   Fixes: timezone-safe dates, month-overflow reset, per-user avatars,
-   pin toggle (max 4), repeat type, sub/repeat auto-reset, red only when
-   due soon, no-glow hero, container-query pin cards, safe-area aware. */
+/* app.js — full app logic. */
 
 const FB = window.FB;
 const BUDGET_ID = 'shared';
@@ -155,7 +152,6 @@ const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history'
 /* ---------- 4. boot ---------- */
 async function startApp() {
   detachListeners();
-
   try {
     const snap = await FB.getDoc(budgetDoc());
     if (!snap.exists()) {
@@ -221,6 +217,7 @@ function attachListeners() {
       if (!App.settingsLoaded) {
         App.settingsLoaded = true;
         maybeAutoReset();
+        syncCurrentHistoryBudget();
       }
       if (['home','categories','settings'].includes(App.screen)) renderScreen(App.screen);
     }
@@ -268,10 +265,8 @@ function detachListeners() {
 
 /* ---------- 6. helpers ---------- */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
-/* Parse "YYYY-MM-DD" as local date (not UTC) to fix timezone drift. */
 function parseLocalDate(iso) {
   if (!iso) return null;
   const s = String(iso).slice(0, 10);
@@ -281,13 +276,9 @@ function parseLocalDate(iso) {
   if (isNaN(y) || isNaN(m) || isNaN(d)) return new Date(iso);
   return new Date(y, m - 1, d);
 }
-
-/* Format local Date as "YYYY-MM-DD" (local timezone, not UTC). */
 function localDateString(d) {
   return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
 }
-
-/* Safe month bump: 31 Jan -> 28/29 Feb, 20 Oct -> 20 Nov, 30 Apr -> 30 May. */
 function addOneMonth(baseDate) {
   const d = new Date(baseDate);
   const targetMonth = d.getMonth() + 1;
@@ -302,21 +293,46 @@ function fmtAmount(n, withCurrency) {
   const s = String(Math.round(Number(n) || 0));
   return (withCurrency && App.settings) ? s + ' ' + App.settings.currency : s;
 }
-
-/* Display: day month year -> "5 Jun 2025" */
 function fmtDate(iso) {
   if (!iso) return '';
   const d = iso.length === 10 ? parseLocalDate(iso) : new Date(iso);
   if (!d || isNaN(d)) return '';
   return d.getDate() + ' ' + MONTHS_SHORT[d.getMonth()] + ' ' + d.getFullYear();
 }
-
 function daysUntil(iso) {
   if (!iso) return null;
   const d = iso.length === 10 ? parseLocalDate(iso) : new Date(iso);
   if (!d || isNaN(d)) return null;
   const t = new Date(); t.setHours(0,0,0,0);
   return Math.round((d - t) / 86400000);
+}
+
+/* DD/MM/YYYY <-> YYYY-MM-DD */
+function ddmmyyyyToISO(str) {
+  if (!str) return '';
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(str.trim());
+  if (!m) return '';
+  const dd = +m[1], mm = +m[2], yy = +m[3];
+  if (mm < 1 || mm > 12) return '';
+  if (dd < 1 || dd > 31) return '';
+  const d = new Date(yy, mm - 1, dd);
+  if (d.getMonth() !== mm - 1 || d.getDate() !== dd) return ''; // caught 31/02
+  return yy + '-' + pad2(mm) + '-' + pad2(dd);
+}
+function isoToDDMMYYYY(iso) {
+  if (!iso) return '';
+  const d = parseLocalDate(iso);
+  if (!d || isNaN(d)) return '';
+  return pad2(d.getDate()) + '/' + pad2(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+function autoSlashDate(el) {
+  let v = el.value.replace(/\D/g, '');
+  if (v.length > 8) v = v.slice(0, 8);
+  let out = '';
+  if (v.length >= 1) out += v.slice(0, 2);
+  if (v.length >= 3) out += '/' + v.slice(2, 4);
+  if (v.length >= 5) out += '/' + v.slice(4, 8);
+  el.value = out;
 }
 
 function esc(s) {
@@ -392,7 +408,6 @@ function makeAppHead(greeting, appName) {
     '<div><div class="greeting">' + esc(greeting) + '</div>' +
     '<div class="appname">' + esc(appName) + '</div></div>' +
     '<div class="avatar-stack"></div>';
-
   const stack = head.querySelector('.avatar-stack');
   const members = (App.settings && App.settings.members) || {};
   const currentUid = App.user && App.user.uid;
@@ -423,7 +438,6 @@ function makeAppHead(greeting, appName) {
     }
     stack.appendChild(av);
   });
-
   return head;
 }
 
@@ -464,7 +478,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ---------- 9. screen — home ---------- */
+/* ---------- 9. home ---------- */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -485,7 +499,6 @@ ScreenRenderers.home = function () {
   const pctLeft     = 100 - pctUsed;
 
   const wrap = document.createElement('div');
-
   const hr = new Date().getHours();
   const greeting = hr < 12 ? 'Good morning,' : hr < 18 ? 'Good afternoon,' : 'Good evening,';
   wrap.appendChild(makeAppHead(greeting, s.appName || 'Our Budget'));
@@ -535,8 +548,10 @@ ScreenRenderers.home = function () {
       const el = document.createElement('div');
       el.className = 'pin c-' + (c.colorKey || 'blue') + (over ? ' over' : '');
       el.innerHTML =
-        '<div class="ico"><span>' + esc(c.icon || '🏷️') + '</span></div>' +
-        '<div class="n">' + esc(c.name) + '</div>' +
+        '<div class="top-row">' +
+          '<div class="name-tag">' + esc(c.name) + '</div>' +
+          '<div class="emoji-only">' + esc(c.icon || '🏷️') + '</div>' +
+        '</div>' +
         '<div class="v">' + fmtAmount(spent) + '</div>' +
         '<div class="small">of ' + fmtAmount(limit) + '</div>' +
         '<div class="bar-row">' +
@@ -594,11 +609,10 @@ ScreenRenderers.home = function () {
     });
     wrap.appendChild(feed);
   }
-
   return wrap;
 };
 
-/* ---------- 10. screen — categories ---------- */
+/* ---------- 10. categories ---------- */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -650,6 +664,7 @@ ScreenRenderers.categories = function () {
       const over  = limit > 0 && spent > limit;
       const pct   = limit > 0 ? Math.round((spent / limit) * 100) : 0;
       const left  = limit - spent;
+      const isPinned = Number(cat.pinOrder) > 0;
 
       const card = document.createElement('div');
       card.className = 'cat c-' + (cat.colorKey || 'blue') + (over ? ' over' : '');
@@ -657,7 +672,10 @@ ScreenRenderers.categories = function () {
         '<div class="cat-icon">' + esc(cat.icon || '🏷️') + '</div>' +
         '<div class="cat-body">' +
           '<div class="cat-top">' +
-            '<span class="cat-name">' + esc(cat.name) + '</span>' +
+            '<div class="cat-name-wrap">' +
+              '<span class="cat-name">' + esc(cat.name) + '</span>' +
+              (isPinned ? '<span class="pin-pill">📌</span>' : '') +
+            '</div>' +
             '<span class="cat-amt"><b>' + fmtAmount(spent) + '</b> / ' + fmtAmount(limit) + '</span>' +
           '</div>' +
           '<div class="cat-bar"><div style="width:' + Math.min(100, pct) + '%"></div></div>' +
@@ -675,11 +693,10 @@ ScreenRenderers.categories = function () {
     const btn = document.getElementById('cat-new');
     if (btn) btn.onclick = () => openCategoryEditor(null);
   }, 0);
-
   return wrap;
 };
 
-/* ---------- 11. screen — buy ---------- */
+/* ---------- 11. buy ---------- */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const items = App.buy.slice().sort((a, b) => {
@@ -760,7 +777,6 @@ ScreenRenderers.buy = function () {
       for (const x of App.buy.slice()) await FB.deleteDoc(FB.doc(buyCol(), x.id));
     };
   }, 0);
-
   return wrap;
 };
 
@@ -792,7 +808,7 @@ function buyItemMenu(item) {
   });
 }
 
-/* ---------- 12. screen — to pay ---------- */
+/* ---------- 12. to pay ---------- */
 ScreenRenderers.topay = function () {
   const items = App.toPay.slice();
   const sortKey = (x) => {
@@ -864,7 +880,6 @@ ScreenRenderers.topay = function () {
     });
     wrap.appendChild(list);
   }
-
   return wrap;
 };
 
@@ -875,7 +890,7 @@ function togglePaid(item) {
   });
 }
 
-/* ---------- 13. screen — history ---------- */
+/* ---------- 13. history ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -912,19 +927,19 @@ ScreenRenderers.history = function () {
     wrap.appendChild(empty);
   } else {
     rows.forEach(r => {
-      const over = Number(r.totalSpent) > Number(r.budgetSnapshot);
-      const pct = Number(r.budgetSnapshot) > 0
-        ? Math.min(100, Math.round((Number(r.totalSpent) / Number(r.budgetSnapshot)) * 100))
-        : 0;
+      const budget = Number(r.budgetSnapshot) || 0;
+      const spent  = Number(r.totalSpent) || 0;
+      const over   = spent > budget;
+      const pct    = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
       const card = document.createElement('div');
       card.className = 'hcard';
       card.innerHTML =
         '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span>' +
         '<span class="pill ' + (over ? 'red' : 'green') + '">' + (over ? 'Over' : 'Within') + '</span></div>' +
         '<div class="row2">' +
-          '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(r.budgetSnapshot) + '</div></div>' +
+          '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(budget) + '</div></div>' +
           '<div class="cell"><div class="k">Spent</div><div class="v' + (over ? ' over' : '') + '">' +
-          fmtAmount(r.totalSpent) + '</div></div></div>' +
+          fmtAmount(spent) + '</div></div></div>' +
         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
       wrap.appendChild(card);
     });
@@ -938,11 +953,10 @@ ScreenRenderers.history = function () {
     if (next && !next.classList.contains('disabled'))
       next.onclick = () => { App.historyYear = String(Number(App.historyYear) + 1); renderScreen('history'); };
   }, 0);
-
   return wrap;
 };
 
-/* ---------- 14. screen — settings ---------- */
+/* ---------- 14. settings ---------- */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const parents = App.categories.filter(c => !c.parentId);
@@ -999,7 +1013,6 @@ ScreenRenderers.settings = function () {
   runRow.onclick = () => confirmRunReset();
   reset.appendChild(runRow);
   wrap.appendChild(reset);
-
   wrap.appendChild(hint('Period start day = when each budget period begins. To Pay reset day = when subscriptions and repeats roll forward.'));
 
   // Appearance
@@ -1065,7 +1078,6 @@ ScreenRenderers.settings = function () {
   signOutBtn.textContent = 'Sign out';
   signOutBtn.onclick = () => { if (confirm('Sign out?')) FB.signOut(FB.auth); };
   wrap.appendChild(signOutBtn);
-
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
   setTimeout(() => {
@@ -1077,7 +1089,6 @@ ScreenRenderers.settings = function () {
       if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
     });
   }, 0);
-
   return wrap;
 };
 
@@ -1102,7 +1113,18 @@ function bindInput(id, onCommit) {
   el.addEventListener('blur', () => onCommit(el.value));
   el.addEventListener('keydown', ev => { if (ev.key === 'Enter') el.blur(); });
 }
-function saveSetting(key, value) { FB.updateDoc(budgetDoc(), { [key]: value }); }
+
+/* Save setting AND refresh the current period's History row budget. */
+function saveSetting(key, value) {
+  const merged = Object.assign({}, App.settings || DEFAULT_SETTINGS);
+  merged[key] = value;
+  return FB.updateDoc(budgetDoc(), { [key]: value }).then(() => {
+    if (key === 'totalBudget' || key === 'periodStartDay') {
+      syncCurrentHistoryBudget(merged);
+    }
+  });
+}
+
 function changeTheme(theme) {
   saveSetting('theme', theme);
   document.body.setAttribute('data-theme', theme === 'system'
@@ -1113,7 +1135,35 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- 15. avatar picker (per-user) ---------- */
+/* ---------- 15. sync history budget for current period ---------- */
+async function syncCurrentHistoryBudget(settingsOverride) {
+  const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
+  const period = computeCurrentPeriod(s.periodStartDay);
+  const budgetNow = Number(s.totalBudget) || 0;
+  const ref = FB.doc(historyCol(), period.key);
+  try {
+    const snap = await FB.getDoc(ref);
+    if (!snap.exists()) {
+      await FB.setDoc(ref, {
+        periodKey: period.key,
+        periodLabel: period.label,
+        budgetSnapshot: budgetNow,
+        totalSpent: 0,
+      });
+    } else {
+      const data = snap.data();
+      if (data.budgetSnapshot !== budgetNow || data.periodLabel !== period.label) {
+        await FB.updateDoc(ref, {
+          periodLabel: period.label,
+          budgetSnapshot: budgetNow,
+        });
+      }
+    }
+    await recomputeHistoryTotal(period.key);
+  } catch (e) { console.error('syncCurrentHistoryBudget:', e); }
+}
+
+/* ---------- 16. avatar picker ---------- */
 function openAvatarPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -1157,9 +1207,7 @@ function openAvatarPicker() {
           await saveAvatar(b64);
           closeSheet();
           toast('Avatar updated');
-        } catch (err) {
-          toast('Could not process image');
-        }
+        } catch (err) { toast('Could not process image'); }
       };
       input.click();
     };
@@ -1228,7 +1276,7 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- 16. reset day picker ---------- */
+/* ---------- 17. reset day picker ---------- */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -1303,7 +1351,7 @@ function openResetDayPicker() {
   });
 }
 
-/* ---------- 17. manual run reset ---------- */
+/* ---------- 18. reset (manual + auto) ---------- */
 function confirmRunReset() {
   const ok = confirm(
     'Run To Pay reset now?\n\n' +
@@ -1317,7 +1365,6 @@ function confirmRunReset() {
   runToPayReset().then(() => toast('To Pay reset ran'));
 }
 
-/* ---------- 18. reset logic (timezone + month overflow safe) ---------- */
 async function runToPayReset() {
   const today = new Date();
   const todayY = today.getFullYear();
@@ -1375,9 +1422,8 @@ async function maybeAutoReset() {
     const d = Math.min(31, Math.max(1, Number(resetDay) || 25));
     const dim = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
     const candidate = new Date(today.getFullYear(), today.getMonth(), Math.min(d, dim));
-    if (today >= candidate) {
-      resetDate = candidate;
-    } else {
+    if (today >= candidate) resetDate = candidate;
+    else {
       const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const dimLm = new Date(lm.getFullYear(), lm.getMonth() + 1, 0).getDate();
       resetDate = new Date(lm.getFullYear(), lm.getMonth(), Math.min(d, dimLm));
@@ -1386,12 +1432,11 @@ async function maybeAutoReset() {
 
   const resetKey = resetDate.getFullYear() + '-' + pad2(resetDate.getMonth() + 1);
   if (App.settings.lastResetKey === resetKey) return;
-
   await runToPayReset();
   await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
 }
 
-/* ---------- 19. category editor (inline pickers + pin toggle) ---------- */
+/* ---------- 19. category editor ---------- */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat
@@ -1407,19 +1452,16 @@ function openCategoryEditor(cat) {
     h3.textContent = isNew ? 'New category' : 'Edit category';
     body.appendChild(h3);
 
-    // Name
     const nameF = document.createElement('div');
     nameF.className = 'field';
     nameF.innerHTML = '<label>Name</label><input id="ce-name" value="' + esc(editing.name) + '">';
     body.appendChild(nameF);
 
-    // Limit
     const limF = document.createElement('div');
     limF.className = 'field';
     limF.innerHTML = '<label>Limit</label><input id="ce-limit" inputmode="numeric" value="' + (editing.limit || 0) + '">';
     body.appendChild(limF);
 
-    // Pin toggle
     const pinF = document.createElement('div');
     pinF.className = 'field';
     pinF.style.cursor = 'pointer';
@@ -1429,18 +1471,15 @@ function openCategoryEditor(cat) {
     pinF.onclick = () => {
       const toggle = document.getElementById('ce-pin-toggle');
       if (pinState) {
-        pinState = false;
-        editing.pinOrder = 0;
+        pinState = false; editing.pinOrder = 0;
         toggle.classList.remove('on');
       } else {
         if (otherPins >= 4) { toast('Max 4 pins — unpin one first'); return; }
-        pinState = true;
-        editing.pinOrder = otherPins + 1;
+        pinState = true; editing.pinOrder = otherPins + 1;
         toggle.classList.add('on');
       }
     };
 
-    // Icon
     const iconF = document.createElement('div');
     iconF.className = 'field';
     iconF.style.cursor = 'pointer';
@@ -1454,7 +1493,6 @@ function openCategoryEditor(cat) {
     iconPanel.style.display = 'none';
     body.appendChild(iconPanel);
 
-    // Color
     const colorF = document.createElement('div');
     colorF.className = 'field c-' + (editing.colorKey || 'blue');
     colorF.style.cursor = 'pointer';
@@ -1523,7 +1561,7 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* ---------- 20. color picker (inline) ---------- */
+/* ---------- 20. color picker ---------- */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -1548,7 +1586,7 @@ function buildColorPicker(container, current, onPick) {
   container.appendChild(grid);
 }
 
-/* ---------- 21. icon picker (inline, searchable) ---------- */
+/* ---------- 21. icon picker ---------- */
 const ICONS = {
   'Food & Drink': [
     ['🛒','cart shop grocery food'],['🥦','broccoli veg'],['🍞','bread bakery'],
@@ -1669,7 +1707,6 @@ function buildIconPicker(container, current, onPick) {
       scroll.appendChild(empty);
     }
   }
-
   search.oninput = () => render(search.value);
   wrap.appendChild(scroll);
 
@@ -1692,23 +1729,51 @@ function buildIconPicker(container, current, onPick) {
   render('');
 }
 
-/* ---------- 22. tone picker ---------- */
+/* ---------- 22. tone picker (35 tones, ordered by hue) ---------- */
 const TONES = [
-  { key: 'forest',   name: 'Forest',   a: '#1b4332', b: '#40916c' },
-  { key: 'ocean',    name: 'Ocean',    a: '#0a84ff', b: '#5b4bff' },
-  { key: 'midnight', name: 'Midnight', a: '#1a1a2e', b: '#3b2f6b' },
-  { key: 'twilight', name: 'Twilight', a: '#3a1c71', b: '#d76d77' },
-  { key: 'emerald',  name: 'Emerald',  a: '#0f766e', b: '#14b8a6' },
-  { key: 'sunset',   name: 'Sunset',   a: '#ff512f', b: '#f09819' },
-  { key: 'coral',    name: 'Coral',    a: '#ff6b6b', b: '#ee5a24' },
-  { key: 'rose',     name: 'Rose',     a: '#c9184a', b: '#ff8fab' },
-  { key: 'grape',    name: 'Grape',    a: '#5f0f40', b: '#9a031e' },
-  { key: 'graphite', name: 'Graphite', a: '#2b2d42', b: '#4a4e69' },
-  { key: 'sand',     name: 'Sand',     a: '#a47148', b: '#d4a373' },
-  { key: 'slate',    name: 'Slate',    a: '#33415c', b: '#5c6b8a' },
-  { key: 'berry',    name: 'Berry',    a: '#6a0572', b: '#ab83a1' },
-  { key: 'mint',     name: 'Mint',     a: '#009688', b: '#7fdbca' },
-  { key: 'blush',    name: 'Blush',    a: '#e07a5f', b: '#f2cc8f' },
+  // Yellows / Oranges
+  { key: 'sunset',      name: 'Sunset',       a: '#ff512f', b: '#f09819' },
+  { key: 'ambersky',    name: 'Amber Sky',    a: '#f12711', b: '#f5af19' },
+  { key: 'coral',       name: 'Coral',        a: '#ff6b6b', b: '#ee5a24' },
+  { key: 'cherry',      name: 'Cherry',       a: '#eb3349', b: '#f45c43' },
+  { key: 'fire',        name: 'Fire',         a: '#cb2d3e', b: '#ef473a' },
+  { key: 'sunrise',     name: 'Sunrise',      a: '#ff9966', b: '#ff5e62' },
+  // Reds
+  { key: 'blood',       name: 'Blood',        a: '#870000', b: '#190a05' },
+  { key: 'rose',        name: 'Rose',         a: '#c9184a', b: '#ff8fab' },
+  { key: 'grape',       name: 'Grape',        a: '#5f0f40', b: '#9a031e' },
+  { key: 'plumfire',    name: 'Plum Fire',    a: '#4b134f', b: '#c94b4b' },
+  { key: 'indigosun',   name: 'Indigo Sun',   a: '#1a2a6c', b: '#b21f1f' },
+  // Pinks
+  { key: 'lava',        name: 'Lava',         a: '#ff512f', b: '#dd2476' },
+  { key: 'rosegold',    name: 'Rose Gold',    a: '#b24592', b: '#f15f79' },
+  { key: 'twilight',    name: 'Twilight',     a: '#3a1c71', b: '#d76d77' },
+  { key: 'berry',       name: 'Berry',        a: '#6a0572', b: '#ab83a1' },
+  // Purples
+  { key: 'cosmic',      name: 'Cosmic',       a: '#ff00cc', b: '#333399' },
+  { key: 'electric',    name: 'Electric',     a: '#4776e6', b: '#8e54e9' },
+  { key: 'nebula',      name: 'Nebula',       a: '#8e2de2', b: '#4a00e0' },
+  { key: 'berrywine',   name: 'Berry Wine',   a: '#41295a', b: '#2f0743' },
+  { key: 'midnight',    name: 'Midnight',     a: '#1a1a2e', b: '#3b2f6b' },
+  // Blues
+  { key: 'ocean',       name: 'Ocean',        a: '#0a84ff', b: '#5b4bff' },
+  { key: 'midnightsea', name: 'Midnight Sea', a: '#141e30', b: '#243b55' },
+  { key: 'aurora',      name: 'Aurora',       a: '#00b4db', b: '#0083b0' },
+  // Teals
+  { key: 'tealnight',   name: 'Teal Night',   a: '#0f2027', b: '#2c5364' },
+  { key: 'deepsea',     name: 'Deep Sea',     a: '#2c3e50', b: '#4ca1af' },
+  { key: 'emerald',     name: 'Emerald',      a: '#0f766e', b: '#14b8a6' },
+  { key: 'mint',        name: 'Mint',         a: '#009688', b: '#7fdbca' },
+  { key: 'jungle',      name: 'Jungle',       a: '#134e5e', b: '#71b280' },
+  // Greens
+  { key: 'forest',      name: 'Forest',       a: '#1b4332', b: '#40916c' },
+  // Neutrals
+  { key: 'steel',       name: 'Steel',        a: '#485563', b: '#29323c' },
+  { key: 'graphite',    name: 'Graphite',     a: '#2b2d42', b: '#4a4e69' },
+  { key: 'slate',       name: 'Slate',        a: '#33415c', b: '#5c6b8a' },
+  { key: 'sand',        name: 'Sand',         a: '#a47148', b: '#d4a373' },
+  { key: 'copper',      name: 'Copper',       a: '#b79891', b: '#94716b' },
+  { key: 'blush',       name: 'Blush',        a: '#e07a5f', b: '#f2cc8f' },
 ];
 function openTonePicker(currentKey) {
   openSheet((body) => {
@@ -1716,6 +1781,7 @@ function openTonePicker(currentKey) {
     const h3 = document.createElement('h3');
     h3.textContent = 'Hero tone';
     body.appendChild(h3);
+
     const grid = document.createElement('div');
     grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:4px 0;';
     TONES.forEach(t => {
@@ -1812,7 +1878,7 @@ function openExpenseEditor(expense, prefillName) {
           name, amount, categoryId: chosenCat, subcategoryId: '',
           dateAdded: new Date().toISOString(), periodKey,
         });
-        await ensureHistoryRowForCurrentPeriod();
+        await syncCurrentHistoryBudget();
       } else {
         await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat });
         await recomputeHistoryTotal(expense.periodKey);
@@ -1833,12 +1899,12 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ---------- 24. To Pay editor (repeat until) ---------- */
+/* ---------- 24. To Pay editor (DD/MM/YYYY date input) ---------- */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
     name: '', amount: null,
-    dueDate: localDateString(new Date()),
+    dueDate: localDateString(new Date()),  // stored as YYYY-MM-DD
     paid: false, paidDate: null,
     isSubscription: false, isRepeat: false, repeatUntil: '',
   };
@@ -1861,11 +1927,17 @@ function openToPayEditor(item) {
       (item.amount != null ? item.amount : '') + '" placeholder="Optional">';
     body.appendChild(amtF);
 
+    // DD/MM/YYYY text input — no browser month-first
     const dueF = document.createElement('div');
     dueF.className = 'field';
-    dueF.innerHTML = '<label>Due date</label><input id="tp-due" type="date" value="' + (item.dueDate || '') + '">';
+    dueF.innerHTML = '<label>Due date</label>' +
+      '<input class="date-input" id="tp-due" type="text" inputmode="numeric" ' +
+        'placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(item.dueDate) + '">';
     body.appendChild(dueF);
+    const dueInput = dueF.querySelector('#tp-due');
+    dueInput.addEventListener('input', () => autoSlashDate(dueInput));
 
+    // Type
     const typeF = document.createElement('div');
     typeF.className = 'field';
     typeF.innerHTML = '<label>Type</label>';
@@ -1886,11 +1958,16 @@ function openToPayEditor(item) {
     typeF.appendChild(seg);
     body.appendChild(typeF);
 
+    // Repeat until (also DD/MM/YYYY)
     const repeatEndF = document.createElement('div');
     repeatEndF.className = 'field';
     repeatEndF.style.display = (type === 'repeat') ? 'flex' : 'none';
-    repeatEndF.innerHTML = '<label>Repeat until</label><input id="tp-repeat-end" type="date" value="' + (item.repeatUntil || '') + '">';
+    repeatEndF.innerHTML = '<label>Repeat until</label>' +
+      '<input class="date-input" id="tp-repeat-end" type="text" inputmode="numeric" ' +
+        'placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(item.repeatUntil) + '">';
     body.appendChild(repeatEndF);
+    const repInput = repeatEndF.querySelector('#tp-repeat-end');
+    repInput.addEventListener('input', () => autoSlashDate(repInput));
 
     const info = document.createElement('div');
     info.className = 'hint';
@@ -1907,21 +1984,26 @@ function openToPayEditor(item) {
       const amtVal = document.getElementById('tp-amt').value.trim();
       const amount = amtVal === '' ? null : Number(amtVal);
       if (amount !== null && (isNaN(amount) || amount < 0)) { toast('Invalid amount'); return; }
-      const due = document.getElementById('tp-due').value || '';
-      if ((type === 'subscription' || type === 'repeat') && !due) {
-        toast('Recurring items need a due date'); return;
+
+      const dueStr = document.getElementById('tp-due').value;
+      const dueISO = dueStr ? ddmmyyyyToISO(dueStr) : '';
+      if ((type === 'subscription' || type === 'repeat') && !dueISO) {
+        toast('Recurring items need a valid due date'); return;
       }
-      let repeatUntil = '';
+      if (dueStr && !dueISO) { toast('Invalid date — use DD/MM/YYYY'); return; }
+
+      let repeatUntilISO = '';
       if (type === 'repeat') {
-        repeatUntil = document.getElementById('tp-repeat-end').value || '';
-        if (!repeatUntil) { toast('Repeat needs an end date'); return; }
+        const repStr = document.getElementById('tp-repeat-end').value;
+        repeatUntilISO = repStr ? ddmmyyyyToISO(repStr) : '';
+        if (!repeatUntilISO) { toast('Repeat needs a valid end date'); return; }
       }
 
       const data = {
-        name, amount, dueDate: due,
+        name, amount, dueDate: dueISO,
         isSubscription: type === 'subscription',
         isRepeat: type === 'repeat',
-        repeatUntil: repeatUntil || '',
+        repeatUntil: repeatUntilISO || '',
       };
       closeSheet();
       if (isNew) {
@@ -1947,7 +2029,7 @@ function openToPayEditor(item) {
   });
 }
 
-/* ---------- 25. history maintenance ---------- */
+/* ---------- 25. history helpers ---------- */
 async function ensureHistoryRowForCurrentPeriod() {
   const settings = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(settings.periodStartDay);
