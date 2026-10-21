@@ -6,7 +6,6 @@
 <title>Our Budget</title>
 <link rel="stylesheet" href="style.css">
 
-<!-- Firebase SDK (CDN, ES-module). Exposed on window.FB for app.js. -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import {
@@ -19,29 +18,20 @@
     deleteDoc, setDoc, getDoc, getDocs, query, where, orderBy, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-  /* Firebase project config (safe to expose — this is a public client key). */
   const firebaseConfig = {
-
-    apiKey: "AIzaSyAP-3bO3N2IRgvY7IAFdI7L-PcQvSZQL6I",
-
-    authDomain: "expense-tracker-385ea.firebaseapp.com",
-
-    projectId: "expense-tracker-385ea",
-
-    storageBucket: "expense-tracker-385ea.firebasestorage.app",
-
-    messagingSenderId: "706781764931",
-
-    appId: "1:706781764931:web:582daccaf37ab0cde863f6"
-
+    apiKey: "AIzaSyCvfnT1Ae5z9MamxnhcPJtDcQMlUoB9xdk",
+    authDomain: "our-budget-4c4d7.firebaseapp.com",
+    projectId: "our-budget-4c4d7",
+    storageBucket: "our-budget-4c4d7.firebasestorage.app",
+    messagingSenderId: "558436370018",
+    appId: "1:558436370018:web:3919e6be359c6c291c333b",
+    measurementId: "G-Z0MQHV7YFM"
   };
-
 
   const app  = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db   = getFirestore(app);
 
-  /* Expose everything app.js needs. */
   window.FB = {
     app, auth, db,
     GoogleAuthProvider, signInWithPopup,
@@ -51,7 +41,6 @@
     setDoc, getDoc, getDocs, query, where, orderBy, serverTimestamp
   };
 
-  /* Load app.js after Firebase is ready. */
   import('./app.js');
 </script>
 </head>
@@ -59,13 +48,11 @@
 
 <div id="app">
 
-  <!-- Loading overlay — hidden once auth state is known -->
   <div id="loading" class="loading-overlay">
     <div class="spinner"></div>
     <div class="loading-text">Loading…</div>
   </div>
 
-  <!-- Login screen — shown only when signed out -->
   <div id="login-screen" class="login-screen" hidden>
     <div class="login-card">
       <div class="login-logo">💰</div>
@@ -101,17 +88,12 @@
     </div>
   </div>
 
-  <!-- Tab screens — only one visible at a time -->
   <div id="screens"></div>
-
-  <!-- Bottom tab bar -->
   <nav id="tabbar" class="tabbar" aria-label="Main navigation"></nav>
-
-  <!-- Floating toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <!-- Modal sheet root -->
   <div id="sheet-root"></div>
+
+  <button class="fab" id="fab" aria-label="Add">＋</button>
 
 </div>
 
