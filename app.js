@@ -202,6 +202,9 @@ async function startApp() {
   renderTabbar();
   goScreen('home');
   document.getElementById('loading').classList.add('hidden');
+  
+  // Auto cleanup old expenses
+  cleanupOldExpenses();
 }
 
 async function registerMember() {
@@ -323,6 +326,7 @@ function detachListeners() {
 
 /* ---------- 6. helpers ---------- */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
 function parseLocalDate(iso) {
@@ -792,9 +796,15 @@ ScreenRenderers.buy = function () {
     items.forEach(item => {
       const r = document.createElement('div');
       r.className = 'gitem' + (item.checked ? ' paid' : '');
+      
+      let tagHtml = '';
+      if (item.tag === 'me') tagHtml = '<span class="tag-avs"><div class="av av-b me">M</div></span>';
+      else if (item.tag === 'partner') tagHtml = '<span class="tag-avs"><div class="av av-a">A</div></span>';
+      else if (item.tag === 'joint') tagHtml = '<span class="tag-avs"><div class="av av-a">A</div><div class="av av-b me">M</div></span>';
+
       r.innerHTML =
         '<div class="gcheck' + (item.checked ? ' on' : '') + '">' + (item.checked ? '✓' : '') + '</div>' +
-        '<div class="gname">' + esc(item.name) + '</div>';
+        '<div class="gname">' + esc(item.name) + ' ' + tagHtml + '</div>';
       r.querySelector('.gcheck').onclick = (ev) => { ev.stopPropagation(); toggleBuy(item); };
 
       let t = null;
@@ -827,7 +837,7 @@ ScreenRenderers.buy = function () {
         if (!v) return;
         inp.value = '';
         await FB.addDoc(buyCol(), {
-          name: v, checked: false,
+          name: v, checked: false, tag: 'joint',
           createdAt: new Date().toISOString(), checkedAt: null,
         });
       };
@@ -857,17 +867,31 @@ function toggleBuy(item) {
 function buyItemMenu(item) {
   openSheet((body, footer) => {
     const t = document.createElement('h3'); t.textContent = item.name; body.appendChild(t);
-    const edit = h('button', { class: 'primary' }, 'Rename');
-    edit.onclick = async () => {
-      const v = prompt('New name:', item.name);
-      if (v === null) return;
-      const trimmed = v.trim();
-      if (!trimmed) return;
-      closeSheet();
-      await FB.updateDoc(FB.doc(buyCol(), item.id), { name: trimmed });
-    };
-    footer.appendChild(edit);
-    const del = h('button', { class: 'danger' }, 'Delete');
+    
+    const tagF = document.createElement('div');
+    tagF.className = 'field';
+    tagF.style.flexDirection = 'column';
+    tagF.style.alignItems = 'flex-start';
+    tagF.innerHTML = '<label style="margin-bottom:8px;">Who is buying this?</label>';
+    const tagSeg = document.createElement('div');
+    tagSeg.className = 'segmented';
+    tagSeg.style.width = '100%';
+    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.flex = '1';
+      if (item.tag === val) b.className = 'active';
+      b.onclick = () => {
+        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        FB.updateDoc(FB.doc(buyCol(), item.id), { tag: val });
+      };
+      tagSeg.appendChild(b);
+    });
+    tagF.appendChild(tagSeg);
+    body.appendChild(tagF);
+
+    const del = h('button', { class: 'danger' }, 'Delete Item');
     del.onclick = async () => {
       closeSheet();
       await FB.deleteDoc(FB.doc(buyCol(), item.id));
@@ -928,7 +952,6 @@ ScreenRenderers.topay = function () {
       else { metaTxt = 'Due ' + fmtDate(item.dueDate) + ' · ' + d + ' days'; metaCls = 'pmeta'; }
 
       if (item.isRepeat && item.repeatUntil) metaTxt += ' · until ' + fmtDate(item.repeatUntil);
-      if (item.tag && item.tag !== 'joint') metaTxt += ' · ' + item.tag.toUpperCase();
 
       const amountHtml = item.amount == null
         ? '<div class="pamt" style="color:var(--text3);font-size:13px">—</div>'
@@ -936,12 +959,17 @@ ScreenRenderers.topay = function () {
       const subTag = item.isSubscription ? '<span class="pill-sub">SUB</span>' : '';
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
+      
+      let tagHtml = '';
+      if (item.tag === 'me') tagHtml = '<span class="tag-avs"><div class="av av-b me">M</div></span>';
+      else if (item.tag === 'partner') tagHtml = '<span class="tag-avs"><div class="av av-a">A</div></span>';
+      else if (item.tag === 'joint') tagHtml = '<span class="tag-avs"><div class="av av-a">A</div><div class="av av-b me">M</div></span>';
 
       const r = document.createElement('div');
       r.className = 'prow' + (item.paid ? ' paid' : '');
       r.innerHTML =
         '<div class="pcheck' + (item.paid ? ' on' : '') + '">' + (item.paid ? '✓' : '') + '</div>' +
-        '<div class="pbody"><div class="pname">' + esc(item.name) + ' ' + subTag + repTag + debtTag + '</div>' +
+        '<div class="pbody"><div class="pname">' + esc(item.name) + ' ' + subTag + repTag + debtTag + tagHtml + '</div>' +
         '<div class="' + metaCls + '">' + esc(metaTxt) + '</div></div>' + amountHtml;
 
       r.querySelector('.pcheck').onclick = (ev) => { ev.stopPropagation(); togglePaid(item); };
@@ -1047,12 +1075,14 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us) {
     share = Number(us.budgetFixed) || 0;
   }
 
-  // Add To Pay share for unpaid items in that period
-  const periodExpenses = App.toPay.filter(x => !x.paid); // Simplification: using all unpaid for now
+  const periodExpenses = App.toPay.filter(x => !x.paid); 
   let myToPay = 0;
   
   if (us.toPayMethod === 'tagged') {
     myToPay = periodExpenses.filter(x => x.tag === 'me').reduce((a, x) => a + Number(x.amount || 0), 0);
+    const jointItems = periodExpenses.filter(x => x.tag === 'joint');
+    const jointTotal = jointItems.reduce((a, x) => a + Number(x.amount || 0), 0);
+    myToPay += jointTotal * (us.budgetMethod === 'pct' ? (Number(us.budgetPct)/100) : (Number(us.budgetFixed)/totalBudget || 0));
   } else if (us.toPayMethod === 'fixed') {
     myToPay = Number(us.toPayFixed) || 0;
   } else {
@@ -1068,18 +1098,22 @@ ScreenRenderers.saved = function () {
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   const lastPeriod = computePreviousPeriod(period);
-  const showSaved = us.salary > 0;
-
+  
   // Calculate total saved from history
   const totalSaved = App.history.reduce((acc, h) => {
     const totalSpent = Number(h.totalSpent) || 0;
     const budget = Number(h.budgetSnapshot) || 0;
     return acc + (budget - totalSpent); 
-  }, 0); // Simplified total for demonstration, real logic uses salaries
+  }, 0); 
 
   // Calculate last month saved
   const lastMonthRow = App.history.find(h => h.periodKey === lastPeriod.key);
-  const lastMonthSaved = lastMonthRow ? (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent)) : 0;
+  let lastMonthSaved = 0;
+  let lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + "-01").getMonth()];
+
+  if (lastMonthRow) {
+    lastMonthSaved = (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent));
+  }
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Combined wealth,', 'Saved'));
@@ -1091,7 +1125,7 @@ ScreenRenderers.saved = function () {
       '<div class="lbl">Total Household Savings</div>' +
       '<div class="amt">' + fmtAmount(totalSaved) + '<span class="cur">' + esc(s.currency) + '</span></div>' +
       '<div class="hero-last-month">' +
-        '<div class="k">' + esc(lastPeriod.label.split(' ')[1]) + ' Saved</div>' +
+        '<div class="k">' + lastMonthLabel + ' savings</div>' +
         '<div class="v">' + fmtAmount(lastMonthSaved) + '</div>' +
       '</div>' +
     '</div>';
@@ -1179,11 +1213,11 @@ ScreenRenderers.settings = function () {
   arow.innerHTML =
     avatarHtml +
     '<div class="info">' +
-      '<div class="t">' + esc(s.appName || 'Our Budget') + '</div>' +
-      '<div class="s">' + (myMember.avatarBase64 ? 'Tap to change avatar' : 'Tap to set an avatar') + '</div>' +
+      '<div class="t">' + esc(myMember.name || 'My Profile') + '</div>' +
+      '<div class="s">Tap to change name & avatar</div>' +
     '</div>' +
     '<span class="chev">›</span>';
-  arow.onclick = () => openAvatarPicker();
+  arow.onclick = () => openProfileEditor();
   pg.appendChild(arow);
   wrap.appendChild(pg);
 
@@ -1197,13 +1231,6 @@ ScreenRenderers.settings = function () {
     updateUserSetting('trackSavings', el.classList.contains('on'));
   }));
   wrap.appendChild(mg);
-
-  wrap.appendChild(sectionTitle('General'));
-  const g = group();
-  g.appendChild(rowInput('App name', 'set-appname', s.appName || ''));
-  g.appendChild(rowInput('Currency', 'set-currency', s.currency || 'SEK'));
-  g.appendChild(rowInput('Total budget', 'set-budget', s.totalBudget || 0));
-  wrap.appendChild(g);
 
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
@@ -1223,16 +1250,82 @@ ScreenRenderers.settings = function () {
   });
   themeRow.appendChild(seg);
   appear.appendChild(themeRow);
+
+  const toneRow = document.createElement('div');
+  toneRow.className = 'row';
+  toneRow.innerHTML = '<span class="lbl">Hero tone</span>' +
+    '<div style="width:56px;height:26px;border-radius:8px;background:linear-gradient(160deg,var(--hero-a),var(--hero-b));"></div>';
+  toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
+  appear.appendChild(toneRow);
+
+  const subRow = document.createElement('div');
+  subRow.className = 'row';
+  subRow.innerHTML = '<span class="lbl">Subscription Pill</span><div class="swatch" style="background:var(--pill-sub-cl);"></div>';
+  subRow.onclick = () => openPillColorPicker('sub');
+  appear.appendChild(subRow);
+
+  const repRow = document.createElement('div');
+  repRow.className = 'row';
+  repRow.innerHTML = '<span class="lbl">Repeat Pill</span><div class="swatch" style="background:var(--pill-rep-cl);"></div>';
+  repRow.onclick = () => openPillColorPicker('rep');
+  appear.appendChild(repRow);
+
+  const debtRow = document.createElement('div');
+  debtRow.className = 'row';
+  debtRow.innerHTML = '<span class="lbl">Debt Pill</span><div class="swatch" style="background:var(--pill-debt-cl);"></div>';
+  debtRow.onclick = () => openPillColorPicker('debt');
+  appear.appendChild(debtRow);
+
+  const pinRow = document.createElement('div');
+  pinRow.className = 'row';
+  pinRow.innerHTML = '<span class="lbl">Pin Pill</span><div class="swatch" style="background:var(--pill-pin-cl);"></div>';
+  pinRow.onclick = () => openPillColorPicker('pin');
+  appear.appendChild(pinRow);
+
   wrap.appendChild(appear);
+
+  wrap.appendChild(sectionTitle('Reset'));
+  const reset = group();
+  reset.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
+  
+  const topayDayRow = document.createElement('div');
+  topayDayRow.className = 'row';
+  const dayVal = s.toPayResetDay === 'last' || s.toPayResetDay == null ? 'Last day ›' : s.toPayResetDay + 'th ›';
+  topayDayRow.innerHTML = '<span class="lbl">To Pay reset day</span><span class="val">' + esc(dayVal) + '</span>';
+  topayDayRow.onclick = () => openResetDayPicker();
+  reset.appendChild(topayDayRow);
+
+  const runRow = document.createElement('div');
+  runRow.className = 'row';
+  runRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Run To Pay reset now</span><span style="color:var(--text3);">›</span>';
+  runRow.onclick = () => confirmRunReset();
+  reset.appendChild(runRow);
+  wrap.appendChild(reset);
+
+  wrap.appendChild(sectionTitle('Account'));
+  const acct = group();
+  const emailRow = document.createElement('div');
+  emailRow.className = 'row';
+  emailRow.innerHTML = '<span class="lbl">Email Address</span><span class="val">' + esc(App.user?.email || '—') + '</span>';
+  emailRow.onclick = () => changeEmail();
+  acct.appendChild(emailRow);
+  
+  const exportRow = document.createElement('div');
+  exportRow.className = 'row';
+  exportRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Export Data (Backup)</span>';
+  exportRow.onclick = () => exportData();
+  acct.appendChild(exportRow);
+
+  const importRow = document.createElement('div');
+  importRow.className = 'row';
+  importRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Import Data (Restore)</span>';
+  importRow.onclick = () => importData();
+  acct.appendChild(importRow);
+  
+  wrap.appendChild(acct);
 
   wrap.appendChild(sectionTitle('Danger Zone'));
   const dz = group();
-  const exportRow = document.createElement('div');
-  exportRow.className = 'row';
-  exportRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Export Data (CSV)</span>';
-  exportRow.onclick = () => exportCSV();
-  dz.appendChild(exportRow);
-  
   const resetRow = document.createElement('div');
   resetRow.className = 'row';
   resetRow.innerHTML = '<span class="lbl" style="color:var(--red);font-weight:600;">Hard Reset App</span>';
@@ -1251,9 +1344,10 @@ ScreenRenderers.settings = function () {
     bindInput('set-salary',  v => updateUserSetting('salary', Number(v) || 0));
     bindInput('set-budget-fixed', v => updateUserSetting('budgetFixed', Number(v) || 0));
     bindInput('set-topay-fixed', v => updateUserSetting('toPayFixed', Number(v) || 0));
-    bindInput('set-appname',  v => saveSetting('appName', v));
-    bindInput('set-currency', v => saveSetting('currency', v));
-    bindInput('set-budget',   v => saveSetting('totalBudget', Number(v) || 0));
+    bindInput('set-startday', v => {
+      const n = parseInt(v, 10);
+      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
+    });
   }, 0);
   return wrap;
 };
@@ -1306,21 +1400,78 @@ function changeTheme(theme) {
 }
 
 /* ---------- 16. safety & data ---------- */
-function exportCSV() {
-  let csv = "Type,Date,Name,Amount,Category\n";
-  App.expenses.forEach(e => {
-    const cat = App.categories.find(c => c.id === e.categoryId)?.name || 'Unknown';
-    csv += `Expense,${e.dateAdded.split('T')[0]},"${e.name}",${e.amount},${cat}\n`;
-  });
-  App.toPay.forEach(t => {
-    csv += `ToPay,${t.dueDate || ''},"${t.name}",${t.amount || 0},${t.isSubscription?'SUB':(t.isDebt?'DEBT':'REP')}\n`;
-  });
-  const blob = new Blob([csv], { type: 'text/csv' });
+function exportData() {
+  const data = {
+    settings: App.settings,
+    categories: App.categories,
+    expenses: App.expenses,
+    toPay: App.toPay,
+    buy: App.buy,
+    history: App.history,
+    goals: App.goals
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.csv`;
+  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.json`;
   a.click();
-  toast('CSV Backup downloaded');
+  toast('Backup downloaded');
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!confirm('This will OVERWRITE your current data. Are you sure?')) return;
+        
+        // Wipe existing
+        for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
+        for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
+        for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
+        for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
+        for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
+        for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
+
+        // Restore
+        await FB.setDoc(budgetDoc(), data.settings);
+        for (const c of data.categories) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
+        for (const c of data.expenses) await FB.setDoc(FB.doc(expensesCol(), c.id), c);
+        for (const c of data.toPay) await FB.setDoc(FB.doc(toPayCol(), c.id), c);
+        for (const c of data.buy) await FB.setDoc(FB.doc(buyCol(), c.id), c);
+        for (const c of data.goals) await FB.setDoc(FB.doc(goalsCol(), c.id), c);
+        for (const c of data.history) await FB.setDoc(FB.doc(historyCol(), c.id), c);
+
+        toast('Data restored successfully');
+        setTimeout(() => window.location.reload(), 1500);
+      } catch (err) {
+        toast('Import failed: Invalid file');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+async function changeEmail() {
+  const newEmail = prompt('Enter new email address:');
+  if (!newEmail) return;
+  const password = prompt('Enter current password to confirm:');
+  if (!password) return;
+  try {
+    const cred = FB.EmailAuthProvider.credential(App.user.email, password);
+    await FB.reauthenticateWithCredential(App.user, cred);
+    await FB.updateEmail(App.user, newEmail);
+    toast('Email updated to ' + newEmail);
+  } catch (err) {
+    toast('Failed: ' + err.message);
+  }
 }
 
 async function confirmHardReset() {
@@ -1330,7 +1481,6 @@ async function confirmHardReset() {
   if (pw !== 'RESET') { toast('Reset cancelled'); return; }
 
   try {
-    // Delete collections
     for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
     for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
     for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
@@ -1338,7 +1488,6 @@ async function confirmHardReset() {
     for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
     for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
 
-    // Reset settings
     await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
     toast('App has been hard reset');
     setTimeout(() => window.location.reload(), 1500);
@@ -1347,8 +1496,8 @@ async function confirmHardReset() {
   }
 }
 
-/* ---------- 17. avatar picker ---------- */
-function openAvatarPicker() {
+/* ---------- 17. profile / avatar picker ---------- */
+function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
   const myMember = (App.user && members[App.user.uid]) || {};
@@ -1356,8 +1505,13 @@ function openAvatarPicker() {
   openSheet((body, footer) => {
     body.innerHTML = '';
     const title = document.createElement('h3');
-    title.textContent = 'Your avatar';
+    title.textContent = 'Edit Profile';
     body.appendChild(title);
+
+    const nameF = document.createElement('div');
+    nameF.className = 'field';
+    nameF.innerHTML = '<label>Name</label><input id="prof-name" value="' + esc(myMember.name || '') + '" placeholder="Your name">';
+    body.appendChild(nameF);
 
     const preview = document.createElement('div');
     preview.style.cssText = 'display:flex;justify-content:center;padding:16px 0;';
@@ -1411,13 +1565,16 @@ function openAvatarPicker() {
     }
 
     footer.innerHTML = '';
-    const cancel = document.createElement('button');
-    cancel.className = 'primary';
-    cancel.style.background = 'var(--track)';
-    cancel.style.color = 'var(--text)';
-    cancel.textContent = 'Close';
-    cancel.onclick = closeSheet;
-    footer.appendChild(cancel);
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save Profile';
+    saveBtn.onclick = async () => {
+      const newName = document.getElementById('prof-name').value.trim();
+      await FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.name']: newName });
+      closeSheet();
+      toast('Profile updated');
+    };
+    footer.appendChild(saveBtn);
   });
 }
 
@@ -1453,90 +1610,99 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- 18. goals ---------- */
+/* ---------- 18. goals (V4) ---------- */
 function openGoalEditor() {
-  openSheet((body, footer) => {
-    body.innerHTML = '';
-    const h3 = document.createElement('h3');
-    h3.textContent = 'New Savings Goal';
-    body.appendChild(h3);
-
-    const nameF = document.createElement('div');
-    nameF.className = 'field';
-    nameF.innerHTML = '<label>Goal Name</label><input id="g-name" placeholder="Vacation">';
-    body.appendChild(nameF);
-
-    const targetF = document.createElement('div');
-    targetF.className = 'field';
-    targetF.innerHTML = '<label>Target Amount</label><input id="g-target" inputmode="numeric" placeholder="5000">';
-    body.appendChild(targetF);
-
-    const autoF = document.createElement('div');
-    autoF.className = 'field';
-    autoF.innerHTML = '<label>Auto / Month</label><input id="g-auto" inputmode="numeric" placeholder="200">';
-    body.appendChild(autoF);
-
-    footer.innerHTML = '';
-    const save = document.createElement('button');
-    save.className = 'primary';
-    save.textContent = 'Create Goal';
-    save.onclick = async () => {
-      const name = document.getElementById('g-name').value.trim();
-      const target = Number(document.getElementById('g-target').value);
-      const auto = Number(document.getElementById('g-auto').value) || 0;
-      if (!name || !target) { toast('Fill name and target'); return; }
-      closeSheet();
-      await FB.addDoc(goalsCol(), {
-        name, target, current: 0, autoAmount: auto,
-        createdAt: new Date().toISOString()
-      });
-    };
-    footer.appendChild(save);
-  });
+  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '' };
+  showGoalSheet(g, true);
+}
+function openGoalSheet(g) {
+  showGoalSheet(g, false);
 }
 
-function openGoalSheet(g) {
+function showGoalSheet(g, isNew) {
   openSheet((body, footer) => {
     body.innerHTML = '';
-    const h3 = document.createElement('h3');
-    h3.textContent = g.name;
-    body.appendChild(h3);
+    
+    // V4 Hero Layout
+    const heroDiv = document.createElement('div');
+    heroDiv.className = 'v4-hero';
+    
+    const iconEl = document.createElement('div');
+    iconEl.className = 'v4-icon';
+    iconEl.textContent = g.icon || '🎯';
+    iconEl.onclick = () => {
+      buildIconPickerInline(g.icon || '🎯', (emoji) => {
+        g.icon = emoji;
+        iconEl.textContent = emoji;
+      });
+    };
+    heroDiv.appendChild(iconEl);
 
-    const hero = document.createElement('div');
-    hero.className = 'modal-goal-hero';
-    hero.innerHTML = `
-      <div class="amt">${fmtAmount(g.current)}</div>
-      <div class="sub">of ${fmtAmount(g.target)} target</div>
-      <div class="bar"><div style="width:${Math.min(100, (g.current/g.target)*100)}%;height:100%;background:var(--green);"></div></div>
-    `;
-    body.appendChild(hero);
+    const titleInput = document.createElement('input');
+    titleInput.className = 'v4-title-input';
+    titleInput.value = g.name || 'New Goal';
+    titleInput.placeholder = 'Goal Name';
+    heroDiv.appendChild(titleInput);
 
-    const list = document.createElement('div');
-    list.className = 'split-list';
-    list.innerHTML = `
-      <div class="split-item">
-        <div class="who"><div class="av av-a">A</div> Partner A</div>
-        <div class="amt">+ ${fmtAmount(g.current * 0.6)}</div>
-      </div>
-      <div class="split-item">
-        <div class="who"><div class="av av-b">M</div> You</div>
-        <div class="amt">+ ${fmtAmount(g.current * 0.4)}</div>
-      </div>
-    `;
-    body.appendChild(list);
+    const amtInput = document.createElement('input');
+    amtInput.className = 'v4-amount-input';
+    amtInput.value = g.target || '';
+    amtInput.placeholder = '0';
+    amtInput.inputMode = 'numeric';
+    heroDiv.appendChild(amtInput);
+    
+    body.appendChild(heroDiv);
 
-    const addBtn = document.createElement('button');
-    addBtn.className = 'primary';
-    addBtn.textContent = '+ Add One-Time Amount';
-    addBtn.onclick = () => {
-      const amt = Number(prompt('How much do you want to add?', '100'));
-      if (amt > 0) {
-        FB.updateDoc(FB.doc(goalsCol(), g.id), { current: g.current + amt });
-        closeSheet();
-        toast('Added to goal');
+    // Date Row
+    const dateRow = document.createElement('div');
+    dateRow.className = 'v4-row';
+    dateRow.innerHTML = '<label>Target Date (Optional)</label>' +
+      '<input id="g-date" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(g.targetDate) + '">';
+    body.appendChild(dateRow);
+    const dInp = dateRow.querySelector('#g-date');
+    dInp.addEventListener('input', () => autoSlashDate(dInp));
+
+    // Actions
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'v4-actions';
+    
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'v4-btn-save';
+    saveBtn.textContent = isNew ? 'Create Goal' : 'Save Goal';
+    saveBtn.onclick = async () => {
+      const name = titleInput.value.trim();
+      const target = Number(amtInput.value);
+      const targetDate = ddmmyyyyToISO(dInp.value) || '';
+      if (!name || !target) { toast('Name and Amount required'); return; }
+      
+      closeSheet();
+      if (isNew) {
+        await FB.addDoc(goalsCol(), {
+          name, icon: g.icon, target, current: 0, autoAmount: Number(g.autoAmount) || 0, targetDate,
+          createdAt: new Date().toISOString()
+        });
+      } else {
+        await FB.updateDoc(FB.doc(goalsCol(), g.id), {
+          name, icon: g.icon, target, targetDate
+        });
       }
     };
-    footer.appendChild(addBtn);
+    actionsDiv.appendChild(saveBtn);
+
+    if (!isNew) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'v4-btn-del';
+      delBtn.textContent = '🗑';
+      delBtn.onclick = async () => {
+        if (!confirm('Delete this goal?')) return;
+        closeSheet();
+        await FB.deleteDoc(FB.doc(goalsCol(), g.id));
+      };
+      actionsDiv.appendChild(delBtn);
+    }
+    
+    body.appendChild(actionsDiv);
+    footer.innerHTML = ''; // Hide default footer
   });
 }
 
@@ -1695,87 +1861,42 @@ function buildColorPicker(container, current, onPick) {
   });
   container.appendChild(grid);
 }
+function openPillColorPicker(type) {
+  openSheet((body) => {
+    body.innerHTML = '';
+    const h3 = document.createElement('h3');
+    h3.textContent = 'Pick Pill Color';
+    body.appendChild(h3);
+    const grid = document.createElement('div');
+    grid.className = 'palette-grid';
+    const current = (App.settings.pillColors && App.settings.pillColors[type]) || 'blue';
+    PALETTE.forEach(key => {
+      const chip = document.createElement('div');
+      chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
+      chip.onclick = async () => {
+        const pc = { ...(App.settings.pillColors || {}), [type]: key };
+        await saveSetting('pillColors', pc);
+        closeSheet();
+      };
+      grid.appendChild(chip);
+    });
+    body.appendChild(grid);
+  });
+}
 
 /* ---------- 21. icon picker ---------- */
 const ICONS = {
-  'Food & Drink': [
-    ['🛒','cart shop grocery food'],['🥦','broccoli veg'],['🍞','bread bakery'],
-    ['🥩','meat steak'],['🐟','fish seafood'],['🍎','apple fruit'],
-    ['☕','coffee tea'],['🍽️','plate dining'],['🍔','burger food'],
-    ['🍕','pizza'],['🍜','noodles'],['🍰','cake dessert'],
-    ['🍷','wine'],['🍺','beer'],['🥤','soda drink'],['🧃','juice'],
-    ['🍬','candy sweet'],['🍦','ice cream sweet'],
-  ],
-  'Candy & Sweets': [
-    ['🍬','candy sweet'],['🍭','lollipop candy'],['🍫','chocolate candy'],
-    ['🍩','donut sweet'],['🍪','cookie sweet'],['🧁','cupcake sweet'],
-    ['🍰','cake dessert sweet'],['🍦','ice cream sweet'],['🍨','ice cream sweet'],
-    ['🍧','shaved ice sweet'],['🍿','popcorn snack'],['🍯','honey sweet'],
-  ],
-  'Home & Utilities': [
-    ['🏠','home house rent mortgage'],['💡','light bulb electricity'],
-    ['🔌','plug power'],['🔥','fire gas heat'],['💧','water drop'],
-    ['🚿','shower'],['🧻','paper tissue toilet'],['🧹','broom clean'],
-    ['🛋️','sofa couch'],['🛏️','bed bedroom'],['📺','tv television'],
-    ['🌐','internet web'],['📶','wifi'],['🗑️','trash bin garbage'],
-    ['🧰','toolbox repair'],['🔧','wrench tool'],
-  ],
-  'Transport': [
-    ['🚌','bus commute'],['🚇','metro subway'],['🚕','taxi cab uber'],
-    ['🚗','car auto drive'],['⛽','gas fuel petrol'],['🅿️','parking'],
-    ['🚲','bike bicycle'],['🛴','scooter'],['✈️','plane flight'],
-    ['🚆','train rail'],['🛵','motorcycle'],['⛴️','ferry boat'],
-    ['🎫','ticket pass'],['🗺️','map navigation'],['🚏','bus stop'],['🛣️','highway road'],
-  ],
-  'Health': [
-    ['💊','pill medicine pharmacy'],['🩺','stethoscope doctor'],['🏥','hospital'],
-    ['💉','syringe vaccine'],['🧴','lotion bottle'],['🪥','toothbrush dental'],
-    ['🩹','bandage first aid'],['🧘','yoga meditation'],['🏋️','gym weights'],
-    ['🏃','run exercise'],['🚴','cycle exercise'],['🩸','blood'],
-    ['🫀','heart'],['🧠','brain mental'],['🦷','tooth'],['👁️','eye vision'],
-  ],
-  'Entertainment': [
-    ['🎬','movie film cinema'],['🎮','game gaming'],['🎵','music note'],
-    ['🎤','microphone sing'],['🎭','theater drama'],['🎨','art paint'],
-    ['📚','books reading'],['🎧','headphones audio'],['🎲','dice game'],
-    ['🏖️','beach vacation'],['🎢','rollercoaster theme park'],['🎯','target dart'],
-    ['🎳','bowling'],['🎪','circus festival'],['🏕️','camping tent'],['🎸','guitar music'],
-  ],
-  'Shopping': [
-    ['🛍️','shopping bag retail'],['👕','shirt clothes'],['👗','dress fashion'],
-    ['👟','shoe sneakers'],['💄','lipstick makeup'],['💇','haircut salon'],
-    ['🧴','shampoo skincare'],['👓','glasses eyewear'],['👜','handbag purse'],
-    ['💍','ring jewelry'],['🕶️','sunglasses'],['🎁','gift present'],
-    ['🎀','ribbon bow'],['🧸','teddy toy'],['💐','flowers'],['🛏️','bedroom'],
-  ],
-  'Family & Pets': [
-    ['👶','baby infant'],['🧒','child kid'],['👨‍👩‍👧','family parents'],
-    ['🐶','dog puppy pet'],['🐱','cat kitten pet'],['🐾','paw pet'],
-    ['🦴','bone treat'],['🐠','fish aquarium'],['🐦','bird'],
-    ['🐹','hamster'],['🌱','seedling plant'],['🪴','plant houseplant'],
-    ['🌸','flower blossom'],['🌳','tree nature'],['🧑‍🍼','parent baby'],['❤️','heart love'],
-  ],
-  'Money & Admin': [
-    ['💳','credit card bank'],['💰','money bag salary'],['🏦','bank finance'],
-    ['💸','money expense'],['📊','chart analytics budget'],['🧾','receipt bill invoice paper'],
-    ['📄','paper document file'],['📝','paper note memo write'],['🗂️','folders organize'],
-    ['🔒','lock secure'],['🏷️','tag label'],['⚖️','balance law'],
-    ['🪙','coin cash'],['💵','dollar bill'],['📮','mailbox mail'],['🏢','office work'],
-  ],
-  'Travel & Events': [
-    ['🏖️','beach holiday'],['🏔️','mountain'],['🏨','hotel stay'],
-    ['🗺️','map journey'],['✈️','plane flight'],['🎫','ticket entry'],
-    ['🎉','party celebrate'],['🎂','birthday cake'],['🎊','confetti'],
-    ['🎓','graduation'],['🎁','gift'],['🏟️','stadium sports'],
-    ['🎡','ferris wheel'],['🚢','cruise ship'],['🌍','earth world'],['🕯️','candle ceremony'],
-  ],
-  'Misc': [
-    ['📱','phone mobile cell'],['💻','laptop computer work'],['🖥️','desktop monitor'],
-    ['⌚','watch time'],['📷','camera photo'],['🎒','backpack bag'],
-    ['🔑','key lock access'],['🧩','puzzle piece'],['🧲','magnet magnetic'],
-    ['⚙️','gear settings tools'],['❓','question unknown'],['⭐','star favorite'],
-    ['🔔','bell notification'],['🌟','star shine'],['💫','sparkle'],['🏷️','default tag'],
-  ],
+  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
+  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
+  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
+  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
+  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
+  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
+  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
+  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
+  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
+  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
+  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
 };
 function buildIconPicker(container, current, onPick) {
   container.innerHTML = '';
@@ -1845,44 +1966,41 @@ function buildIconPicker(container, current, onPick) {
   container.appendChild(wrap);
   render('');
 }
+function buildIconPickerInline(current, onPick) {
+  openSheet((body) => {
+    body.innerHTML = '';
+    const h3 = document.createElement('h3');
+    h3.textContent = 'Pick an Icon';
+    body.appendChild(h3);
+    const container = document.createElement('div');
+    body.appendChild(container);
+    buildIconPicker(container, current, (emoji) => {
+      onPick(emoji);
+      closeSheet();
+    });
+  });
+}
 
 /* ---------- 22. tone picker ---------- */
 const TONES = [
-  { key: 'sunset',      name: 'Sunset',       a: '#ff512f', b: '#f09819' },
-  { key: 'ambersky',    name: 'Amber Sky',    a: '#f12711', b: '#f5af19' },
-  { key: 'coral',       name: 'Coral',        a: '#ff6b6b', b: '#ee5a24' },
-  { key: 'cherry',      name: 'Cherry',       a: '#eb3349', b: '#f45c43' },
-  { key: 'fire',        name: 'Fire',         a: '#cb2d3e', b: '#ef473a' },
-  { key: 'sunrise',     name: 'Sunrise',      a: '#ff9966', b: '#ff5e62' },
-  { key: 'blood',       name: 'Blood',        a: '#870000', b: '#190a05' },
-  { key: 'rose',        name: 'Rose',         a: '#c9184a', b: '#ff8fab' },
-  { key: 'grape',       name: 'Grape',        a: '#5f0f40', b: '#9a031e' },
-  { key: 'plumfire',    name: 'Plum Fire',    a: '#4b134f', b: '#c94b4b' },
-  { key: 'indigosun',   name: 'Indigo Sun',   a: '#1a2a6c', b: '#b21f1f' },
-  { key: 'lava',        name: 'Lava',         a: '#ff512f', b: '#dd2476' },
-  { key: 'rosegold',    name: 'Rose Gold',    a: '#b24592', b: '#f15f79' },
-  { key: 'twilight',    name: 'Twilight',     a: '#3a1c71', b: '#d76d77' },
-  { key: 'berry',       name: 'Berry',        a: '#6a0572', b: '#ab83a1' },
-  { key: 'cosmic',      name: 'Cosmic',       a: '#ff00cc', b: '#333399' },
-  { key: 'electric',    name: 'Electric',     a: '#4776e6', b: '#8e54e9' },
-  { key: 'nebula',      name: 'Nebula',       a: '#8e2de2', b: '#4a00e0' },
-  { key: 'berrywine',   name: 'Berry Wine',   a: '#41295a', b: '#2f0743' },
-  { key: 'midnight',    name: 'Midnight',     a: '#1a1a2e', b: '#3b2f6b' },
-  { key: 'ocean',       name: 'Ocean',        a: '#0a84ff', b: '#5b4bff' },
-  { key: 'midnightsea', name: 'Midnight Sea', a: '#141e30', b: '#243b55' },
-  { key: 'aurora',      name: 'Aurora',       a: '#00b4db', b: '#0083b0' },
-  { key: 'tealnight',   name: 'Teal Night',   a: '#0f2027', b: '#2c5364' },
-  { key: 'deepsea',     name: 'Deep Sea',     a: '#2c3e50', b: '#4ca1af' },
-  { key: 'emerald',     name: 'Emerald',      a: '#0f766e', b: '#14b8a6' },
-  { key: 'mint',        name: 'Mint',         a: '#009688', b: '#7fdbca' },
-  { key: 'jungle',      name: 'Jungle',       a: '#134e5e', b: '#71b280' },
-  { key: 'forest',      name: 'Forest',       a: '#1b4332', b: '#40916c' },
-  { key: 'steel',       name: 'Steel',        a: '#485563', b: '#29323c' },
-  { key: 'graphite',    name: 'Graphite',     a: '#2b2d42', b: '#4a4e69' },
-  { key: 'slate',       name: 'Slate',        a: '#33415c', b: '#5c6b8a' },
-  { key: 'sand',        name: 'Sand',         a: '#a47148', b: '#d4a373' },
-  { key: 'copper',      name: 'Copper',       a: '#b79891', b: '#94716b' },
-  { key: 'blush',       name: 'Blush',        a: '#e07a5f', b: '#f2cc8f' },
+  { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
+  { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
+  { key: 'fire', name: 'Fire', a: '#cb2d3e', b: '#ef473a' }, { key: 'sunrise', name: 'Sunrise', a: '#ff9966', b: '#ff5e62' },
+  { key: 'blood', name: 'Blood', a: '#870000', b: '#190a05' }, { key: 'rose', name: 'Rose', a: '#c9184a', b: '#ff8fab' },
+  { key: 'grape', name: 'Grape', a: '#5f0f40', b: '#9a031e' }, { key: 'plumfire', name: 'Plum Fire', a: '#4b134f', b: '#c94b4b' },
+  { key: 'indigosun', name: 'Indigo Sun', a: '#1a2a6c', b: '#b21f1f' }, { key: 'lava', name: 'Lava', a: '#ff512f', b: '#dd2476' },
+  { key: 'rosegold', name: 'Rose Gold', a: '#b24592', b: '#f15f79' }, { key: 'twilight', name: 'Twilight', a: '#3a1c71', b: '#d76d77' },
+  { key: 'berry', name: 'Berry', a: '#6a0572', b: '#ab83a1' }, { key: 'cosmic', name: 'Cosmic', a: '#ff00cc', b: '#333399' },
+  { key: 'electric', name: 'Electric', a: '#4776e6', b: '#8e54e9' }, { key: 'nebula', name: 'Nebula', a: '#8e2de2', b: '#4a00e0' },
+  { key: 'berrywine', name: 'Berry Wine', a: '#41295a', b: '#2f0743' }, { key: 'midnight', name: 'Midnight', a: '#1a1a2e', b: '#3b2f6b' },
+  { key: 'ocean', name: 'Ocean', a: '#0a84ff', b: '#5b4bff' }, { key: 'midnightsea', name: 'Midnight Sea', a: '#141e30', b: '#243b55' },
+  { key: 'aurora', name: 'Aurora', a: '#00b4db', b: '#0083b0' }, { key: 'tealnight', name: 'Teal Night', a: '#0f2027', b: '#2c5364' },
+  { key: 'deepsea', name: 'Deep Sea', a: '#2c3e50', b: '#4ca1af' }, { key: 'emerald', name: 'Emerald', a: '#0f766e', b: '#14b8a6' },
+  { key: 'mint', name: 'Mint', a: '#009688', b: '#7fdbca' }, { key: 'jungle', name: 'Jungle', a: '#134e5e', b: '#71b280' },
+  { key: 'forest', name: 'Forest', a: '#1b4332', b: '#40916c' }, { key: 'steel', name: 'Steel', a: '#485563', b: '#29323c' },
+  { key: 'graphite', name: 'Graphite', a: '#2b2d42', b: '#4a4e69' }, { key: 'slate', name: 'Slate', a: '#33415c', b: '#5c6b8a' },
+  { key: 'sand', name: 'Sand', a: '#a47148', b: '#d4a373' }, { key: 'copper', name: 'Copper', a: '#b79891', b: '#94716b' },
+  { key: 'blush', name: 'Blush', a: '#e07a5f', b: '#f2cc8f' },
 ];
 function openTonePicker(currentKey) {
   openSheet((body) => {
@@ -2013,12 +2131,13 @@ function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
     name: '', amount: null,
-    dueDate: localDateString(new Date()),
+    dueDate: '',
     paid: false, paidDate: null,
     isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '',
-    tag: 'joint' // me, partner, joint, custom
+    tag: 'joint' // me, partner, joint
   };
   let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : item.isDebt ? 'debt' : 'none';
+  let localTag = item.tag || 'joint';
 
   openSheet((body, footer) => {
     body.innerHTML = '';
@@ -2060,6 +2179,10 @@ function openToPayEditor(item) {
         seg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
         repeatEndF.style.display = (val === 'repeat' || val === 'debt') ? 'flex' : 'none';
+        // Auto-fill date if switching away from One-time
+        if (val !== 'none' && !dueInput.value) {
+          dueInput.value = isoToDDMMYYYY(localDateString(new Date()));
+        }
       };
       seg.appendChild(b);
     });
@@ -2088,9 +2211,9 @@ function openToPayEditor(item) {
       const b = document.createElement('button');
       b.textContent = label;
       b.style.flex = '1';
-      if (item.tag === val) b.className = 'active';
+      if (localTag === val) b.className = 'active';
       b.onclick = () => {
-        item.tag = val;
+        localTag = val;
         tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
       };
@@ -2098,11 +2221,6 @@ function openToPayEditor(item) {
     });
     tagF.appendChild(tagSeg);
     body.appendChild(tagF);
-
-    const info = document.createElement('div');
-    info.className = 'hint';
-    info.textContent = 'Subscription = repeats forever. Repeat = repeats until date. Debt = same as repeat.';
-    body.appendChild(info);
 
     footer.innerHTML = '';
     const save = document.createElement('button');
@@ -2135,7 +2253,7 @@ function openToPayEditor(item) {
         isRepeat: type === 'repeat',
         isDebt: type === 'debt',
         repeatUntil: repeatUntilISO || '',
-        tag: item.tag
+        tag: localTag
       };
       closeSheet();
       if (isNew) {
@@ -2267,7 +2385,19 @@ function labelForDay(iso) {
   return full;
 }
 
-/* ---------- 27. FAB ---------- */
+/* ---------- 27. Auto Cleanup ---------- */
+async function cleanupOldExpenses() {
+  const currentKey = computeCurrentPeriod(App.settings.periodStartDay).key;
+  const oldExpenses = App.expenses.filter(e => e.periodKey && e.periodKey < currentKey);
+  if (oldExpenses.length === 0) return;
+  
+  console.log('Auto-cleaning ' + oldExpenses.length + ' old expenses');
+  for (const e of oldExpenses) {
+    await FB.deleteDoc(FB.doc(expensesCol(), e.id));
+  }
+}
+
+/* ---------- 28. FAB ---------- */
 document.getElementById('fab').addEventListener('click', () => {
   if (App.screen === 'home') openExpenseEditor(null);
   else if (App.screen === 'topay') openToPayEditor(null);
