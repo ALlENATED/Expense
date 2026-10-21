@@ -50,11 +50,29 @@ FB.onAuthStateChanged(FB.auth, async (user) => {
   }
 });
 
-document.getElementById('google-signin').addEventListener('click', async () => {
-  try {
-    await FB.signInWithPopup(FB.auth, new FB.GoogleAuthProvider());
-  } catch (err) { authError(err); }
-});
+/* Google sign-in — guarded so the button cannot fire twice.
+   The "opening multiple popups was blocked" error happens when
+   signInWithPopup runs a second time while the first popup is
+   still open. The flag below prevents that. */
+let googleBusy = false;
+const googleBtn = document.getElementById('google-signin');
+if (googleBtn) {
+  googleBtn.addEventListener('click', async () => {
+    if (googleBusy) return;
+    googleBusy = true;
+    googleBtn.disabled = true;
+    try {
+      await FB.signInWithPopup(FB.auth, new FB.GoogleAuthProvider());
+    } catch (err) {
+      authError(err);
+    } finally {
+      googleBusy = false;
+      googleBtn.disabled = false;
+    }
+  });
+} else {
+  console.warn('Google sign-in button missing from DOM');
+}
 
 function loginFields() {
   return {
@@ -64,6 +82,7 @@ function loginFields() {
 }
 function showLoginError(msg) {
   const el = document.getElementById('login-error');
+  if (!el) return;
   el.textContent = msg;
   el.style.display = 'block';
 }
@@ -74,15 +93,20 @@ function hideLoginError() {
 function authError(err) {
   const c = (err && err.code) || '';
   if (c === 'auth/popup-blocked' || c === 'auth/popup-closed-by-user')
-    toast('Popup blocked — allow popups for this site.');
+    toast('Popup blocked. Allow popups for this site, then try again.');
+  else if (c === 'auth/cancelled-popup-request')
+    toast('Sign-in already in progress.');
   else if (c === 'auth/unauthorized-domain')
     toast('Domain not authorized in Firebase → Auth → Settings.');
   else if (c === 'auth/operation-not-allowed')
-    toast('Enable Email/Password + Google in Firebase Auth.');
+    toast('Enable Google + Email/Password in Firebase Auth.');
+  else if (c === 'auth/account-exists-with-different-credential')
+    toast('This email already uses a different sign-in method.');
   else toast('Sign-in failed: ' + (err.message || err));
 }
 
-document.getElementById('login-btn').addEventListener('click', async () => {
+const loginBtn = document.getElementById('login-btn');
+if (loginBtn) loginBtn.addEventListener('click', async () => {
   hideLoginError();
   const { email, password } = loginFields();
   if (!email || !password) return showLoginError('Enter email and password.');
@@ -94,11 +118,13 @@ document.getElementById('login-btn').addEventListener('click', async () => {
       showLoginError('Wrong email or password.');
     else if (c === 'auth/too-many-requests') showLoginError('Too many attempts — try again in a few minutes.');
     else if (c === 'auth/network-request-failed') showLoginError('Network error — check your connection.');
+    else if (c === 'auth/operation-not-allowed') showLoginError('Enable Email/Password in Firebase console.');
     else showLoginError(err.message);
   }
 });
 
-document.getElementById('signup-btn').addEventListener('click', async () => {
+const signupBtn = document.getElementById('signup-btn');
+if (signupBtn) signupBtn.addEventListener('click', async () => {
   hideLoginError();
   const { email, password } = loginFields();
   if (!email || !password) return showLoginError('Enter email and password.');
@@ -1050,7 +1076,7 @@ ScreenRenderers.settings = function () {
 
   wrap.appendChild(sectionTitle('Account'));
   const acct = group();
-  acct.appendChild(rowVal('Signed in as', (App.user && App.user.email) || '—', null));
+  acct.appendChild(rowVal('Signed in as', (App.user && App.user.email) || '—'));
   const signOutBtn = document.createElement('div');
   signOutBtn.className = 'row';
   signOutBtn.innerHTML = '<span class="lbl" style="color:var(--red);font-weight:600">Sign out</span>';
