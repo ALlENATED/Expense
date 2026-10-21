@@ -5,8 +5,8 @@ const BUDGET_ID = 'shared';
 
 /* ---------- 1. state ---------- */
 const App = {
-  user: null, settings: null,
-  categories: [], expenses: [], toPay: [], buy: [], history: [],
+  user: null, settings: null, userSettings: null,
+  categories: [], expenses: [], toPay: [], buy: [], history: [], goals: [],
   screen: 'home', historyYear: null, toastTimer: null, listeners: [],
   settingsLoaded: false,
 };
@@ -14,8 +14,16 @@ const App = {
 const DEFAULT_SETTINGS = {
   appName: 'Our Budget', currency: 'SEK', totalBudget: 12000,
   periodStartDay: 25, toPayResetDay: 'last',
-  timezone: 'Europe/Stockholm', theme: 'system', heroTone: 'forest',
+  timezone: 'Europe/Stockholm',
   members: {}, lastResetKey: null,
+  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' }
+};
+
+const DEFAULT_USER_SETTINGS = {
+  theme: 'system', heroTone: 'forest', pins: [],
+  salary: 0, budgetMethod: 'fixed', budgetFixed: 0, budgetPct: 50,
+  toPayMethod: 'tagged', toPayFixed: 0, toPayPct: 50,
+  trackSavings: false
 };
 
 const SEED_CATEGORIES = [
@@ -33,6 +41,7 @@ const TABS = [
   { id: 'buy',        label: 'Buy',        icon: '<path d="M5 7h14l-1.4 11.2a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8L5 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/>' },
   { id: 'topay',      label: 'To Pay',     icon: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m8 12 3 3 5-6"/>' },
   { id: 'history',    label: 'History',    icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>' },
+  { id: 'saved',      label: 'Saved',      icon: '<path d="M4 7h16v12H4z"/><path d="M4 7h16M9 7V4h6v3"/><circle cx="12" cy="13" r="2"/>' },
   { id: 'settings',   label: 'Settings',   icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>' },
 ];
 
@@ -48,6 +57,16 @@ FB.onAuthStateChanged(FB.auth, async (user) => {
   } else {
     signedOut();
   }
+});
+
+document.getElementById('forgot-pw-btn').addEventListener('click', async () => {
+  const email = document.getElementById('login-email').value.trim();
+  if (!email) return showLoginError('Enter your email first, then click Forgot Password.');
+  try {
+    await FB.sendPasswordResetEmail(FB.auth, email);
+    toast('Reset link sent to ' + email);
+    hideLoginError();
+  } catch (err) { showLoginError(err.message); }
 });
 
 let googleBusy = false;
@@ -129,8 +148,8 @@ if (signupBtn) signupBtn.addEventListener('click', async () => {
 
 function signedOut() {
   detachListeners();
-  App.user = null; App.settings = null; App.settingsLoaded = false;
-  App.categories = []; App.expenses = []; App.toPay = []; App.buy = []; App.history = [];
+  App.user = null; App.settings = null; App.userSettings = null; App.settingsLoaded = false;
+  App.categories = []; App.expenses = []; App.toPay = []; App.buy = []; App.history = []; App.goals = [];
   App.screen = 'home'; App.historyYear = null;
   document.getElementById('screens').innerHTML = '';
   document.getElementById('tabbar').innerHTML = '';
@@ -148,6 +167,7 @@ const expensesCol   = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'expenses
 const toPayCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'toPay');
 const buyCol        = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'buy');
 const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history');
+const goalsCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'goals');
 
 /* ---------- 4. boot ---------- */
 async function startApp() {
@@ -163,6 +183,7 @@ async function startApp() {
   } catch (e) { console.error('budget doc:', e); }
 
   await registerMember();
+  await migrateUserSettings();
 
   try {
     const cats = await FB.getDocs(categoriesCol());
@@ -200,10 +221,34 @@ async function registerMember() {
           email, initial,
           avatarBase64: null,
           lastSeen: new Date().toISOString(),
+          ...DEFAULT_USER_SETTINGS
         }
       });
     }
   } catch (e) { console.error('register member:', e); }
+}
+
+async function migrateUserSettings() {
+  if (!App.user || !App.settings) return;
+  const uid = App.user.uid;
+  const members = App.settings.members || {};
+  const me = members[uid] || {};
+  let migrated = false;
+  const updates = {};
+
+  if (!me.theme) { updates[`members.${uid}.theme`] = App.settings.theme || 'system'; migrated = true; }
+  if (!me.heroTone) { updates[`members.${uid}.heroTone`] = App.settings.heroTone || 'forest'; migrated = true; }
+  if (!me.pins) {
+    try {
+      const catsSnap = await FB.getDocs(categoriesCol());
+      updates[`members.${uid}.pins`] = catsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => Number(c.pinOrder) > 0)
+        .sort((a, b) => Number(a.pinOrder) - Number(b.pinOrder))
+        .map(c => c.id);
+      migrated = true;
+    } catch(e) {}
+  }
+  if (migrated) await FB.updateDoc(budgetDoc(), updates);
 }
 
 /* ---------- 5. listeners ---------- */
@@ -213,13 +258,19 @@ function attachListeners() {
   App.listeners.push(FB.onSnapshot(budgetDoc(), (snap) => {
     if (snap.exists()) {
       App.settings = snap.data();
+      if (App.user && App.settings.members && App.settings.members[App.user.uid]) {
+        App.userSettings = { ...DEFAULT_USER_SETTINGS, ...App.settings.members[App.user.uid] };
+      } else {
+        App.userSettings = DEFAULT_USER_SETTINGS;
+      }
       applyThemeAndTone();
+      applyPillColors();
       if (!App.settingsLoaded) {
         App.settingsLoaded = true;
         maybeAutoReset();
         syncCurrentHistoryBudget();
       }
-      if (['home','categories','settings'].includes(App.screen)) renderScreen(App.screen);
+      if (['home','categories','settings','saved'].includes(App.screen)) renderScreen(App.screen);
     }
   }, fail('settings')));
 
@@ -255,8 +306,15 @@ function attachListeners() {
     FB.query(historyCol(), FB.orderBy('periodKey', 'desc')),
     (snap) => {
       App.history = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (App.screen === 'history') renderScreen(App.screen);
+      if (['history', 'saved'].includes(App.screen)) renderScreen(App.screen);
     }, fail('history')));
+
+  App.listeners.push(FB.onSnapshot(
+    FB.query(goalsCol(), FB.orderBy('createdAt')),
+    (snap) => {
+      App.goals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (App.screen === 'saved') renderScreen(App.screen);
+    }, fail('goals')));
 }
 function detachListeners() {
   App.listeners.forEach(u => { try { u(); } catch (e) {} });
@@ -290,7 +348,8 @@ function addOneMonth(baseDate) {
 }
 
 function fmtAmount(n, withCurrency) {
-  const s = String(Math.round(Number(n) || 0));
+  const num = Math.round(Number(n) || 0);
+  const s = String(num).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return (withCurrency && App.settings) ? s + ' ' + App.settings.currency : s;
 }
 function fmtDate(iso) {
@@ -389,15 +448,27 @@ function closeSheet() {
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
 function applyThemeAndTone() {
-  if (!App.settings) return;
-  document.body.setAttribute('data-tone', App.settings.heroTone || 'forest');
-  let theme = App.settings.theme || 'system';
+  if (!App.settings || !App.userSettings) return;
+  document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
+  let theme = App.userSettings.theme || 'system';
   if (theme === 'system')
     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.body.setAttribute('data-theme', theme);
 }
+function applyPillColors() {
+  if (!App.settings || !App.settings.pillColors) return;
+  const pc = App.settings.pillColors;
+  document.documentElement.style.setProperty('--pill-sub-bg', 'var(--cat-' + pc.sub + '-soft)');
+  document.documentElement.style.setProperty('--pill-sub-cl', 'var(--cat-' + pc.sub + ')');
+  document.documentElement.style.setProperty('--pill-rep-bg', 'var(--cat-' + pc.rep + '-soft)');
+  document.documentElement.style.setProperty('--pill-rep-cl', 'var(--cat-' + pc.rep + ')');
+  document.documentElement.style.setProperty('--pill-debt-bg', 'var(--cat-' + pc.debt + '-soft)');
+  document.documentElement.style.setProperty('--pill-debt-cl', 'var(--cat-' + pc.debt + ')');
+  document.documentElement.style.setProperty('--pill-pin-bg', 'var(--cat-' + pc.pin + '-soft)');
+  document.documentElement.style.setProperty('--pill-pin-cl', 'var(--cat-' + pc.pin + ')');
+}
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  if (App.settings && App.settings.theme === 'system') applyThemeAndTone();
+  if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
 });
 
 function makeAppHead(greeting, appName) {
@@ -524,20 +595,18 @@ ScreenRenderers.home = function () {
       '</div></div>';
   wrap.appendChild(hero);
 
-  const pinned = categories
-    .filter(c => Number(c.pinOrder) > 0)
-    .sort((a, b) => Number(a.pinOrder) - Number(b.pinOrder))
-    .slice(0, 4);
+  const pinned = (App.userSettings && App.userSettings.pins) || [];
+  const pinCats = pinned.map(id => categories.find(c => c.id === id)).filter(Boolean).slice(0, 4);
 
-  if (pinned.length > 0) {
+  if (pinCats.length > 0) {
     const pinWrap = document.createElement('div');
     pinWrap.className = 'pinned-wrap';
     pinWrap.innerHTML = '<div class="pinned-head"><h3>Pinned</h3><a data-manage>Manage</a></div>';
     const grid = document.createElement('div');
     grid.className = 'pin-grid';
-    grid.setAttribute('data-count', String(pinned.length));
+    grid.setAttribute('data-count', String(pinCats.length));
 
-    pinned.forEach(c => {
+    pinCats.forEach(c => {
       const spent = spentByCat[c.id] || 0;
       const limit = Number(c.limit) || 0;
       const over = limit > 0 && spent > limit;
@@ -657,13 +726,13 @@ ScreenRenderers.categories = function () {
     empty.innerHTML = '<div class="emoji">📁</div><div>No categories yet.<br><b>Add one to start tracking.</b></div>';
     wrap.appendChild(empty);
   } else {
+    const myPins = (App.userSettings && App.userSettings.pins) || [];
     parents.forEach(cat => {
       const spent = spentByCat[cat.id] || 0;
       const limit = Number(cat.limit) || 0;
       const over  = limit > 0 && spent > limit;
       const pct   = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-      const isPinned = Number(cat.pinOrder) > 0;
-      
+      const isPinned = myPins.includes(cat.id);
       const pinHtml = isPinned ? '<span class="pin-pill">📌</span>' : '';
 
       const card = document.createElement('div');
@@ -859,18 +928,20 @@ ScreenRenderers.topay = function () {
       else { metaTxt = 'Due ' + fmtDate(item.dueDate) + ' · ' + d + ' days'; metaCls = 'pmeta'; }
 
       if (item.isRepeat && item.repeatUntil) metaTxt += ' · until ' + fmtDate(item.repeatUntil);
+      if (item.tag && item.tag !== 'joint') metaTxt += ' · ' + item.tag.toUpperCase();
 
       const amountHtml = item.amount == null
         ? '<div class="pamt" style="color:var(--text3);font-size:13px">—</div>'
         : '<div class="pamt">' + fmtAmount(item.amount) + '</div>';
       const subTag = item.isSubscription ? '<span class="pill-sub">SUB</span>' : '';
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
+      const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
       const r = document.createElement('div');
       r.className = 'prow' + (item.paid ? ' paid' : '');
       r.innerHTML =
         '<div class="pcheck' + (item.paid ? ' on' : '') + '">' + (item.paid ? '✓' : '') + '</div>' +
-        '<div class="pbody"><div class="pname">' + esc(item.name) + ' ' + subTag + repTag + '</div>' +
+        '<div class="pbody"><div class="pname">' + esc(item.name) + ' ' + subTag + repTag + debtTag + '</div>' +
         '<div class="' + metaCls + '">' + esc(metaTxt) + '</div></div>' + amountHtml;
 
       r.querySelector('.pcheck').onclick = (ev) => { ev.stopPropagation(); togglePaid(item); };
@@ -892,6 +963,7 @@ function togglePaid(item) {
 /* ---------- 13. history ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
+  const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   if (!App.historyYear) App.historyYear = String(period.year);
   const currentYear = App.historyYear;
@@ -925,11 +997,19 @@ ScreenRenderers.history = function () {
       '.<br><b>Check back after a few months.</b></div>';
     wrap.appendChild(empty);
   } else {
+    const showSaved = us.salary > 0 && us.trackSavings;
     rows.forEach(r => {
       const budget = Number(r.budgetSnapshot) || 0;
       const spent  = Number(r.totalSpent) || 0;
       const over   = spent > budget;
       const pct    = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
+      
+      let myShare = 0;
+      if (showSaved) {
+        myShare = calculateMyShareForPeriod(r.periodKey, budget, us);
+      }
+      const mySaved = us.salary - myShare;
+
       const card = document.createElement('div');
       card.className = 'hcard';
       card.innerHTML =
@@ -937,8 +1017,12 @@ ScreenRenderers.history = function () {
         '<span class="pill ' + (over ? 'red' : 'green') + '">' + (over ? 'Over' : 'Within') + '</span></div>' +
         '<div class="row2">' +
           '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(budget) + '</div></div>' +
-          '<div class="cell"><div class="k">Spent</div><div class="v' + (over ? ' over' : '') + '">' +
-          fmtAmount(spent) + '</div></div></div>' +
+          '<div class="cell"><div class="k">Total Expenses</div><div class="v' + (over ? ' over' : '') + '">' + fmtAmount(spent) + '</div></div>' +
+          (showSaved ? 
+            '<div class="cell"><div class="k">My Share</div><div class="v">' + fmtAmount(myShare) + '</div></div>' +
+            '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
+            : '') +
+        '</div>' +
         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
       wrap.appendChild(card);
     });
@@ -955,9 +1039,129 @@ ScreenRenderers.history = function () {
   return wrap;
 };
 
-/* ---------- 14. settings ---------- */
+function calculateMyShareForPeriod(periodKey, totalBudget, us) {
+  let share = 0;
+  if (us.budgetMethod === 'pct') {
+    share = totalBudget * (Number(us.budgetPct) / 100);
+  } else {
+    share = Number(us.budgetFixed) || 0;
+  }
+
+  // Add To Pay share for unpaid items in that period
+  const periodExpenses = App.toPay.filter(x => !x.paid); // Simplification: using all unpaid for now
+  let myToPay = 0;
+  
+  if (us.toPayMethod === 'tagged') {
+    myToPay = periodExpenses.filter(x => x.tag === 'me').reduce((a, x) => a + Number(x.amount || 0), 0);
+  } else if (us.toPayMethod === 'fixed') {
+    myToPay = Number(us.toPayFixed) || 0;
+  } else {
+    myToPay = periodExpenses.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100);
+  }
+
+  return share + myToPay;
+}
+
+/* ---------- 14. saved ---------- */
+ScreenRenderers.saved = function () {
+  const s = App.settings || DEFAULT_SETTINGS;
+  const us = App.userSettings || DEFAULT_USER_SETTINGS;
+  const period = computeCurrentPeriod(s.periodStartDay);
+  const lastPeriod = computePreviousPeriod(period);
+  const showSaved = us.salary > 0;
+
+  // Calculate total saved from history
+  const totalSaved = App.history.reduce((acc, h) => {
+    const totalSpent = Number(h.totalSpent) || 0;
+    const budget = Number(h.budgetSnapshot) || 0;
+    return acc + (budget - totalSpent); 
+  }, 0); // Simplified total for demonstration, real logic uses salaries
+
+  // Calculate last month saved
+  const lastMonthRow = App.history.find(h => h.periodKey === lastPeriod.key);
+  const lastMonthSaved = lastMonthRow ? (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent)) : 0;
+
+  const wrap = document.createElement('div');
+  wrap.appendChild(makeAppHead('Combined wealth,', 'Saved'));
+
+  const hero = document.createElement('div');
+  hero.className = 'hero-saved';
+  hero.innerHTML =
+    '<div class="inner">' +
+      '<div class="lbl">Total Household Savings</div>' +
+      '<div class="amt">' + fmtAmount(totalSaved) + '<span class="cur">' + esc(s.currency) + '</span></div>' +
+      '<div class="hero-last-month">' +
+        '<div class="k">' + esc(lastPeriod.label.split(' ')[1]) + ' Saved</div>' +
+        '<div class="v">' + fmtAmount(lastMonthSaved) + '</div>' +
+      '</div>' +
+    '</div>';
+  wrap.appendChild(hero);
+
+  const sh = document.createElement('div');
+  sh.className = 'secttl';
+  sh.innerHTML = '<h2>Savings Goals</h2><a id="goal-new">＋ New Goal</a>';
+  wrap.appendChild(sh);
+
+  if (!App.goals.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
+    wrap.appendChild(empty);
+  } else {
+    App.goals.forEach(g => {
+      const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
+      const el = document.createElement('div');
+      el.className = 'goal-card';
+      el.innerHTML =
+        '<div class="goal-top">' +
+          '<div class="goal-name">' + esc(g.name) + ' <span class="chev">›</span></div>' +
+          '<div class="goal-badge">' + (pct >= 100 ? 'Reached' : 'On Track') + '</div>' +
+        '</div>' +
+        '<div class="goal-nums"><span><b>' + fmtAmount(g.current) + '</b> / ' + fmtAmount(g.target) + '</span><span>' + pct + '%</span></div>' +
+        '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
+        '<div class="goal-foot">' +
+          '<span class="auto-pill">Auto: ' + fmtAmount(g.autoAmount) + ' / mo</span>' +
+          '<span>' + fmtAmount(Math.max(0, g.target - g.current)) + ' to go</span>' +
+        '</div>';
+      el.onclick = () => openGoalSheet(g);
+      wrap.appendChild(el);
+    });
+  }
+
+  // Simplified history rendering for Saved tab
+  const histTitle = document.createElement('div');
+  histTitle.className = 'secttl';
+  histTitle.innerHTML = '<h2>Monthly History</h2>';
+  wrap.appendChild(histTitle);
+
+  App.history.slice(0, 3).forEach(r => {
+    const b = Number(r.budgetSnapshot) || 0;
+    const spent = Number(r.totalSpent) || 0;
+    const saved = b - spent;
+    
+    const hc = document.createElement('div');
+    hc.className = 'hcard';
+    hc.innerHTML = 
+      '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(saved) + '</span></div>' +
+      '<div class="row2" style="justify-content:space-between;font-size:13px;font-weight:600;">' +
+        '<span>Partner: ' + fmtAmount(Math.round(saved * 0.6)) + '</span>' +
+        '<span>You: ' + fmtAmount(Math.round(saved * 0.4)) + '</span>' +
+      '</div>';
+    wrap.appendChild(hc);
+  });
+
+  setTimeout(() => {
+    const btn = document.getElementById('goal-new');
+    if (btn) btn.onclick = () => openGoalEditor();
+  }, 0);
+
+  return wrap;
+};
+
+/* ---------- 15. settings ---------- */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
+  const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const parents = App.categories.filter(c => !c.parentId);
   const members = s.members || {};
   const myMember = (App.user && members[App.user.uid]) || {};
@@ -976,12 +1180,23 @@ ScreenRenderers.settings = function () {
     avatarHtml +
     '<div class="info">' +
       '<div class="t">' + esc(s.appName || 'Our Budget') + '</div>' +
-      '<div class="s">' + (myMember.avatarBase64 ? 'Tap to change avatar' : 'Tap to set an avatar picture') + '</div>' +
+      '<div class="s">' + (myMember.avatarBase64 ? 'Tap to change avatar' : 'Tap to set an avatar') + '</div>' +
     '</div>' +
     '<span class="chev">›</span>';
   arow.onclick = () => openAvatarPicker();
   pg.appendChild(arow);
   wrap.appendChild(pg);
+
+  wrap.appendChild(sectionTitle('My Finances'));
+  const mg = group();
+  mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
+  mg.appendChild(rowInput('My Budget Contribution', 'set-budget-fixed', us.budgetFixed || 0));
+  mg.appendChild(rowInput('My To Pay Fixed', 'set-topay-fixed', us.toPayFixed || 0));
+  mg.appendChild(rowToggle('Track savings', us.trackSavings, (el) => {
+    if (!us.salary) { toast('Enter a salary first'); el.classList.remove('on'); return; }
+    updateUserSetting('trackSavings', el.classList.contains('on'));
+  }));
+  wrap.appendChild(mg);
 
   wrap.appendChild(sectionTitle('General'));
   const g = group();
@@ -989,27 +1204,6 @@ ScreenRenderers.settings = function () {
   g.appendChild(rowInput('Currency', 'set-currency', s.currency || 'SEK'));
   g.appendChild(rowInput('Total budget', 'set-budget', s.totalBudget || 0));
   wrap.appendChild(g);
-
-  wrap.appendChild(sectionTitle('Reset'));
-  const reset = group();
-  reset.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
-
-  const topayDayRow = document.createElement('div');
-  topayDayRow.className = 'row';
-  const dayVal = s.toPayResetDay === 'last' || s.toPayResetDay == null
-    ? 'Last day ›'
-    : s.toPayResetDay + 'th ›';
-  topayDayRow.innerHTML = '<span class="lbl">To Pay reset day</span><span class="val">' + esc(dayVal) + '</span>';
-  topayDayRow.onclick = () => openResetDayPicker();
-  reset.appendChild(topayDayRow);
-
-  const runRow = document.createElement('div');
-  runRow.className = 'row';
-  runRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Run To Pay reset now</span><span style="color:var(--text3);">›</span>';
-  runRow.onclick = () => confirmRunReset();
-  reset.appendChild(runRow);
-  wrap.appendChild(reset);
-  wrap.appendChild(hint('Period start day = when each budget period begins. To Pay reset day = when subscriptions and repeats roll forward.'));
 
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
@@ -1023,48 +1217,28 @@ ScreenRenderers.settings = function () {
     const b = document.createElement('button');
     b.textContent = opt[0].toUpperCase() + opt.slice(1);
     b.dataset.theme = opt;
-    if (s.theme === opt) b.className = 'active';
+    if (us.theme === opt) b.className = 'active';
     b.onclick = () => changeTheme(opt);
     seg.appendChild(b);
   });
   themeRow.appendChild(seg);
   appear.appendChild(themeRow);
-
-  const toneRow = document.createElement('div');
-  toneRow.className = 'row';
-  toneRow.innerHTML = '<span class="lbl">Hero tone</span>' +
-    '<div style="width:56px;height:26px;border-radius:8px;background:linear-gradient(160deg,var(--hero-a),var(--hero-b));box-shadow:inset 0 0 0 1px rgba(0,0,0,.06);"></div>';
-  toneRow.onclick = () => openTonePicker(s.heroTone || 'forest');
-  appear.appendChild(toneRow);
   wrap.appendChild(appear);
 
-  wrap.appendChild(sectionTitle('Categories', parents.length + ' of unlimited'));
-  const cats = group();
-  parents.forEach(c => {
-    const r = document.createElement('div');
-    r.className = 'row';
-    const pinMark = Number(c.pinOrder) > 0 ? '📌 ' : '';
-    r.innerHTML = '<span class="lbl">' + esc(c.icon || '🏷️') + ' ' + esc(c.name) + '</span>' +
-      '<span class="val">' + pinMark + fmtAmount(c.limit) + ' ›</span>';
-    r.onclick = () => openCategoryEditor(c);
-    cats.appendChild(r);
-  });
-  const addCat = document.createElement('div');
-  addCat.className = 'addcat';
-  addCat.innerHTML = '＋ New category';
-  addCat.onclick = () => openCategoryEditor(null);
-  cats.appendChild(addCat);
-  wrap.appendChild(cats);
-
-  wrap.appendChild(sectionTitle('Account'));
-  const acct = group();
-  const emailRow = document.createElement('div');
-  emailRow.className = 'row';
-  emailRow.style.cursor = 'default';
-  emailRow.innerHTML = '<span class="lbl">Signed in as</span>' +
-    '<span class="val" style="font-size:13px;">' + esc((App.user && App.user.email) || '—') + '</span>';
-  acct.appendChild(emailRow);
-  wrap.appendChild(acct);
+  wrap.appendChild(sectionTitle('Danger Zone'));
+  const dz = group();
+  const exportRow = document.createElement('div');
+  exportRow.className = 'row';
+  exportRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Export Data (CSV)</span>';
+  exportRow.onclick = () => exportCSV();
+  dz.appendChild(exportRow);
+  
+  const resetRow = document.createElement('div');
+  resetRow.className = 'row';
+  resetRow.innerHTML = '<span class="lbl" style="color:var(--red);font-weight:600;">Hard Reset App</span>';
+  resetRow.onclick = () => confirmHardReset();
+  dz.appendChild(resetRow);
+  wrap.appendChild(dz);
 
   const signOutBtn = document.createElement('button');
   signOutBtn.className = 'danger-pill';
@@ -1074,13 +1248,12 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
   setTimeout(() => {
+    bindInput('set-salary',  v => updateUserSetting('salary', Number(v) || 0));
+    bindInput('set-budget-fixed', v => updateUserSetting('budgetFixed', Number(v) || 0));
+    bindInput('set-topay-fixed', v => updateUserSetting('toPayFixed', Number(v) || 0));
     bindInput('set-appname',  v => saveSetting('appName', v));
     bindInput('set-currency', v => saveSetting('currency', v));
     bindInput('set-budget',   v => saveSetting('totalBudget', Number(v) || 0));
-    bindInput('set-startday', v => {
-      const n = parseInt(v, 10);
-      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
-    });
   }, 0);
   return wrap;
 };
@@ -1092,12 +1265,23 @@ function sectionTitle(text, count) {
   return el;
 }
 function group() { const g = document.createElement('div'); g.className = 'group'; return g; }
-function hint(text) { const el = document.createElement('div'); el.className = 'hint'; el.textContent = text; return el; }
 function rowInput(label, id, value) {
   const r = document.createElement('div');
   r.className = 'row';
   r.innerHTML = '<span class="lbl">' + esc(label) + '</span>' +
     '<input class="field" id="' + id + '" value="' + esc(value) + '">';
+  return r;
+}
+function rowToggle(label, isOn, onClick) {
+  const r = document.createElement('div');
+  r.className = 'row';
+  r.innerHTML = '<span class="lbl">' + esc(label) + '</span>' +
+    '<div class="pin-toggle' + (isOn ? ' on' : '') + '"></div>';
+  r.onclick = () => {
+    const el = r.querySelector('.pin-toggle');
+    el.classList.toggle('on');
+    onClick(el);
+  };
   return r;
 }
 function bindInput(id, onCommit) {
@@ -1106,19 +1290,13 @@ function bindInput(id, onCommit) {
   el.addEventListener('blur', () => onCommit(el.value));
   el.addEventListener('keydown', ev => { if (ev.key === 'Enter') el.blur(); });
 }
-
-function saveSetting(key, value) {
-  const merged = Object.assign({}, App.settings || DEFAULT_SETTINGS);
-  merged[key] = value;
-  return FB.updateDoc(budgetDoc(), { [key]: value }).then(() => {
-    if (key === 'totalBudget' || key === 'periodStartDay') {
-      syncCurrentHistoryBudget(merged);
-    }
-  });
+function saveSetting(key, value) { FB.updateDoc(budgetDoc(), { [key]: value }); }
+function updateUserSetting(key, value) {
+  if (!App.user) return;
+  FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.' + key]: value });
 }
-
 function changeTheme(theme) {
-  saveSetting('theme', theme);
+  updateUserSetting('theme', theme);
   document.body.setAttribute('data-theme', theme === 'system'
     ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
     : theme);
@@ -1127,35 +1305,49 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- 15. sync history budget ---------- */
-async function syncCurrentHistoryBudget(settingsOverride) {
-  const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
-  const period = computeCurrentPeriod(s.periodStartDay);
-  const budgetNow = Number(s.totalBudget) || 0;
-  const ref = FB.doc(historyCol(), period.key);
-  try {
-    const snap = await FB.getDoc(ref);
-    if (!snap.exists()) {
-      await FB.setDoc(ref, {
-        periodKey: period.key,
-        periodLabel: period.label,
-        budgetSnapshot: budgetNow,
-        totalSpent: 0,
-      });
-    } else {
-      const data = snap.data();
-      if (data.budgetSnapshot !== budgetNow || data.periodLabel !== period.label) {
-        await FB.updateDoc(ref, {
-          periodLabel: period.label,
-          budgetSnapshot: budgetNow,
-        });
-      }
-    }
-    await recomputeHistoryTotal(period.key);
-  } catch (e) { console.error('syncCurrentHistoryBudget:', e); }
+/* ---------- 16. safety & data ---------- */
+function exportCSV() {
+  let csv = "Type,Date,Name,Amount,Category\n";
+  App.expenses.forEach(e => {
+    const cat = App.categories.find(c => c.id === e.categoryId)?.name || 'Unknown';
+    csv += `Expense,${e.dateAdded.split('T')[0]},"${e.name}",${e.amount},${cat}\n`;
+  });
+  App.toPay.forEach(t => {
+    csv += `ToPay,${t.dueDate || ''},"${t.name}",${t.amount || 0},${t.isSubscription?'SUB':(t.isDebt?'DEBT':'REP')}\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  toast('CSV Backup downloaded');
 }
 
-/* ---------- 16. avatar picker ---------- */
+async function confirmHardReset() {
+  if (!confirm("⚠️ ARE YOU SURE?\n\nThis will permanently delete ALL data for EVERYONE. This cannot be undone.")) return;
+  
+  const pw = prompt("Type 'RESET' to confirm:");
+  if (pw !== 'RESET') { toast('Reset cancelled'); return; }
+
+  try {
+    // Delete collections
+    for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
+    for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
+    for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
+    for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
+    for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
+    for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
+
+    // Reset settings
+    await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
+    toast('App has been hard reset');
+    setTimeout(() => window.location.reload(), 1500);
+  } catch (e) {
+    toast('Reset failed: ' + e.message);
+  }
+}
+
+/* ---------- 17. avatar picker ---------- */
 function openAvatarPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -1218,13 +1410,6 @@ function openAvatarPicker() {
       body.appendChild(remove);
     }
 
-    const h2 = document.createElement('div');
-    h2.className = 'hint';
-    h2.style.textAlign = 'center';
-    h2.style.marginTop = '10px';
-    h2.textContent = 'Image is auto-resized to 256×256 JPEG.';
-    body.appendChild(h2);
-
     footer.innerHTML = '';
     const cancel = document.createElement('button');
     cancel.className = 'primary';
@@ -1268,164 +1453,91 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- 17. reset day picker ---------- */
-function openResetDayPicker() {
-  const s = App.settings || DEFAULT_SETTINGS;
-  let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
-
+/* ---------- 18. goals ---------- */
+function openGoalEditor() {
   openSheet((body, footer) => {
     body.innerHTML = '';
     const h3 = document.createElement('h3');
-    h3.textContent = 'To Pay reset day';
+    h3.textContent = 'New Savings Goal';
     body.appendChild(h3);
 
-    const info = document.createElement('div');
-    info.className = 'hint';
-    info.style.marginBottom = '12px';
-    info.textContent = 'When subscriptions and repeats roll forward to next month.';
-    body.appendChild(info);
+    const nameF = document.createElement('div');
+    nameF.className = 'field';
+    nameF.innerHTML = '<label>Goal Name</label><input id="g-name" placeholder="Vacation">';
+    body.appendChild(nameF);
 
-    const lastRow = document.createElement('div');
-    lastRow.className = 'field';
-    lastRow.style.cursor = 'pointer';
-    lastRow.innerHTML =
-      '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
-        '<div class="radio" data-radio="last" style="width:20px;height:20px;border-radius:10px;' +
-          'border:2px solid var(--blue);display:flex;align-items:center;justify-content:center;' +
-          'color:var(--blue);font-weight:800;font-size:12px;">' + (mode === 'last' ? '✓' : '') + '</div>' +
-        '<span style="font-weight:600;">Last day of month</span>' +
-      '</div>';
-    body.appendChild(lastRow);
+    const targetF = document.createElement('div');
+    targetF.className = 'field';
+    targetF.innerHTML = '<label>Target Amount</label><input id="g-target" inputmode="numeric" placeholder="5000">';
+    body.appendChild(targetF);
 
-    const specRow = document.createElement('div');
-    specRow.className = 'field';
-    specRow.style.cursor = 'pointer';
-    specRow.innerHTML =
-      '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
-        '<div class="radio" data-radio="specific" style="width:20px;height:20px;border-radius:10px;' +
-          'border:2px solid var(--blue);display:flex;align-items:center;justify-content:center;' +
-          'color:var(--blue);font-weight:800;font-size:12px;">' + (mode === 'specific' ? '✓' : '') + '</div>' +
-        '<span style="font-weight:600;">Specific day</span>' +
-      '</div>' +
-      '<input id="rs-day" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" ' +
-        'value="' + (mode === 'specific' ? Number(s.toPayResetDay) : '') + '" placeholder="25" ' +
-        'style="width:56px;text-align:right;background:transparent;border:none;outline:none;' +
-        'font-size:16px;font-weight:600;color:var(--text);">';
-    body.appendChild(specRow);
-
-    const setMode = (m) => {
-      mode = m;
-      body.querySelectorAll('[data-radio]').forEach(r => {
-        r.textContent = (r.dataset.radio === m) ? '✓' : '';
-      });
-      if (m === 'specific') setTimeout(() => document.getElementById('rs-day')?.focus(), 20);
-    };
-    lastRow.onclick = () => setMode('last');
-    specRow.onclick = (ev) => { if (ev.target.id !== 'rs-day') setMode('specific'); };
+    const autoF = document.createElement('div');
+    autoF.className = 'field';
+    autoF.innerHTML = '<label>Auto / Month</label><input id="g-auto" inputmode="numeric" placeholder="200">';
+    body.appendChild(autoF);
 
     footer.innerHTML = '';
     const save = document.createElement('button');
     save.className = 'primary';
-    save.textContent = 'Save';
+    save.textContent = 'Create Goal';
     save.onclick = async () => {
-      if (mode === 'last') {
-        await saveSetting('toPayResetDay', 'last');
-      } else {
-        const inp = document.getElementById('rs-day');
-        const n = parseInt((inp.value || '').replace(/\D/g, ''), 10);
-        if (isNaN(n) || n < 1 || n > 31) { toast('Enter a day 1–31'); return; }
-        await saveSetting('toPayResetDay', n);
-      }
+      const name = document.getElementById('g-name').value.trim();
+      const target = Number(document.getElementById('g-target').value);
+      const auto = Number(document.getElementById('g-auto').value) || 0;
+      if (!name || !target) { toast('Fill name and target'); return; }
       closeSheet();
-      toast('Reset day saved');
+      await FB.addDoc(goalsCol(), {
+        name, target, current: 0, autoAmount: auto,
+        createdAt: new Date().toISOString()
+      });
     };
     footer.appendChild(save);
   });
 }
 
-/* ---------- 18. reset (manual + auto) ---------- */
-function confirmRunReset() {
-  const ok = confirm(
-    'Run To Pay reset now?\n\n' +
-    '• One-time items from this month → deleted\n' +
-    '• Subscriptions → due date bumped +1 month, marked unpaid\n' +
-    '• Repeats → same, unless past their repeat-until date → deleted\n' +
-    '• Items with a future-month due date → untouched\n\n' +
-    'Cannot be undone.'
-  );
-  if (!ok) return;
-  runToPayReset().then(() => toast('To Pay reset ran'));
-}
+function openGoalSheet(g) {
+  openSheet((body, footer) => {
+    body.innerHTML = '';
+    const h3 = document.createElement('h3');
+    h3.textContent = g.name;
+    body.appendChild(h3);
 
-async function runToPayReset() {
-  const today = new Date();
-  const todayY = today.getFullYear();
-  const todayM = today.getMonth();
-  const ops = [];
+    const hero = document.createElement('div');
+    hero.className = 'modal-goal-hero';
+    hero.innerHTML = `
+      <div class="amt">${fmtAmount(g.current)}</div>
+      <div class="sub">of ${fmtAmount(g.target)} target</div>
+      <div class="bar"><div style="width:${Math.min(100, (g.current/g.target)*100)}%;height:100%;background:var(--green);"></div></div>
+    `;
+    body.appendChild(hero);
 
-  for (const item of App.toPay) {
-    const due = item.dueDate ? parseLocalDate(item.dueDate) : null;
-    const isFutureMonth = due && (
-      due.getFullYear() > todayY ||
-      (due.getFullYear() === todayY && due.getMonth() > todayM)
-    );
-    if (isFutureMonth) continue;
+    const list = document.createElement('div');
+    list.className = 'split-list';
+    list.innerHTML = `
+      <div class="split-item">
+        <div class="who"><div class="av av-a">A</div> Partner A</div>
+        <div class="amt">+ ${fmtAmount(g.current * 0.6)}</div>
+      </div>
+      <div class="split-item">
+        <div class="who"><div class="av av-b">M</div> You</div>
+        <div class="amt">+ ${fmtAmount(g.current * 0.4)}</div>
+      </div>
+    `;
+    body.appendChild(list);
 
-    if (item.isSubscription) {
-      const base = due || today;
-      const next = addOneMonth(base);
-      ops.push({ t: 'update', id: item.id, data: {
-        dueDate: localDateString(next),
-        paid: false, paidDate: null,
-      }});
-    } else if (item.isRepeat) {
-      const base = due || today;
-      const next = addOneMonth(base);
-      const until = item.repeatUntil ? parseLocalDate(item.repeatUntil) : null;
-      if (until && next > until) ops.push({ t: 'delete', id: item.id });
-      else ops.push({ t: 'update', id: item.id, data: {
-        dueDate: localDateString(next),
-        paid: false, paidDate: null,
-      }});
-    } else {
-      ops.push({ t: 'delete', id: item.id });
-    }
-  }
-
-  for (const op of ops) {
-    try {
-      if (op.t === 'update') await FB.updateDoc(FB.doc(toPayCol(), op.id), op.data);
-      else await FB.deleteDoc(FB.doc(toPayCol(), op.id));
-    } catch (e) { console.error('reset op failed:', op, e); }
-  }
-}
-
-async function maybeAutoReset() {
-  if (!App.settings) return;
-  const resetDay = App.settings.toPayResetDay || 'last';
-  const today = new Date();
-  let resetDate;
-
-  if (resetDay === 'last') {
-    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    if (today >= lastDay) resetDate = lastDay;
-    else resetDate = new Date(today.getFullYear(), today.getMonth(), 0);
-  } else {
-    const d = Math.min(31, Math.max(1, Number(resetDay) || 25));
-    const dim = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const candidate = new Date(today.getFullYear(), today.getMonth(), Math.min(d, dim));
-    if (today >= candidate) resetDate = candidate;
-    else {
-      const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const dimLm = new Date(lm.getFullYear(), lm.getMonth() + 1, 0).getDate();
-      resetDate = new Date(lm.getFullYear(), lm.getMonth(), Math.min(d, dimLm));
-    }
-  }
-
-  const resetKey = resetDate.getFullYear() + '-' + pad2(resetDate.getMonth() + 1);
-  if (App.settings.lastResetKey === resetKey) return;
-  await runToPayReset();
-  await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
+    const addBtn = document.createElement('button');
+    addBtn.className = 'primary';
+    addBtn.textContent = '+ Add One-Time Amount';
+    addBtn.onclick = () => {
+      const amt = Number(prompt('How much do you want to add?', '100'));
+      if (amt > 0) {
+        FB.updateDoc(FB.doc(goalsCol(), g.id), { current: g.current + amt });
+        closeSheet();
+        toast('Added to goal');
+      }
+    };
+    footer.appendChild(addBtn);
+  });
 }
 
 /* ---------- 19. category editor ---------- */
@@ -1435,8 +1547,8 @@ function openCategoryEditor(cat) {
     ? Object.assign({}, cat)
     : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '', pinOrder: 0 };
 
-  let pinState = Number(editing.pinOrder) > 0;
-  const otherPins = App.categories.filter(c => Number(c.pinOrder) > 0 && c.id !== (editing.id || '')).length;
+  let pinState = (App.userSettings.pins || []).includes(editing.id);
+  const otherPins = (App.userSettings.pins || []).length;
 
   openSheet((body, footer) => {
     body.innerHTML = '';
@@ -1462,14 +1574,18 @@ function openCategoryEditor(cat) {
     body.appendChild(pinF);
     pinF.onclick = () => {
       const toggle = document.getElementById('ce-pin-toggle');
+      let currentPins = App.userSettings.pins || [];
       if (pinState) {
-        pinState = false; editing.pinOrder = 0;
+        currentPins = currentPins.filter(id => id !== editing.id);
         toggle.classList.remove('on');
+        pinState = false;
       } else {
-        if (otherPins >= 4) { toast('Max 4 pins — unpin one first'); return; }
-        pinState = true; editing.pinOrder = otherPins + 1;
+        if (currentPins.length >= 4) { toast('Max 4 pins'); return; }
+        currentPins.push(editing.id);
         toggle.classList.add('on');
+        pinState = true;
       }
+      updateUserSetting('pins', currentPins);
     };
 
     const iconF = document.createElement('div');
@@ -1532,12 +1648,14 @@ function openCategoryEditor(cat) {
       const data = {
         name, limit, icon: editing.icon || '🏷️',
         colorKey: editing.colorKey || 'blue',
-        parentId: editing.parentId || '',
-        pinOrder: editing.pinOrder || 0,
+        parentId: editing.parentId || ''
       };
       closeSheet();
-      if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
+      if (isNew) {
+        await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
+      } else {
+        await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
+      }
     };
     footer.appendChild(save);
 
@@ -1586,6 +1704,13 @@ const ICONS = {
     ['☕','coffee tea'],['🍽️','plate dining'],['🍔','burger food'],
     ['🍕','pizza'],['🍜','noodles'],['🍰','cake dessert'],
     ['🍷','wine'],['🍺','beer'],['🥤','soda drink'],['🧃','juice'],
+    ['🍬','candy sweet'],['🍦','ice cream sweet'],
+  ],
+  'Candy & Sweets': [
+    ['🍬','candy sweet'],['🍭','lollipop candy'],['🍫','chocolate candy'],
+    ['🍩','donut sweet'],['🍪','cookie sweet'],['🧁','cupcake sweet'],
+    ['🍰','cake dessert sweet'],['🍦','ice cream sweet'],['🍨','ice cream sweet'],
+    ['🍧','shaved ice sweet'],['🍿','popcorn snack'],['🍯','honey sweet'],
   ],
   'Home & Utilities': [
     ['🏠','home house rent mortgage'],['💡','light bulb electricity'],
@@ -1659,7 +1784,7 @@ function buildIconPicker(container, current, onPick) {
 
   const search = document.createElement('input');
   search.className = 'icon-search';
-  search.placeholder = '🔍  Search icons… (try "paper", "magnet", "car")';
+  search.placeholder = '🔍  Search icons…';
   wrap.appendChild(search);
 
   const scroll = document.createElement('div');
@@ -1783,7 +1908,7 @@ function openTonePicker(currentKey) {
         check.textContent = '✓';
         tile.appendChild(check);
       }
-      tile.onclick = () => { saveSetting('heroTone', t.key); closeSheet(); };
+      tile.onclick = () => { updateUserSetting('heroTone', t.key); closeSheet(); };
       grid.appendChild(tile);
     });
     body.appendChild(grid);
@@ -1890,9 +2015,10 @@ function openToPayEditor(item) {
     name: '', amount: null,
     dueDate: localDateString(new Date()),
     paid: false, paidDate: null,
-    isSubscription: false, isRepeat: false, repeatUntil: '',
+    isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '',
+    tag: 'joint' // me, partner, joint, custom
   };
-  let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : 'none';
+  let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : item.isDebt ? 'debt' : 'none';
 
   openSheet((body, footer) => {
     body.innerHTML = '';
@@ -1925,7 +2051,7 @@ function openToPayEditor(item) {
     typeF.innerHTML = '<label>Type</label>';
     const seg = document.createElement('div');
     seg.className = 'segmented';
-    [['none','One-time'],['subscription','Subscription'],['repeat','Repeat']].forEach(([val, label]) => {
+    [['none','One-time'],['subscription','Sub'],['repeat','Repeat'],['debt','Debt']].forEach(([val, label]) => {
       const b = document.createElement('button');
       b.textContent = label;
       if (type === val) b.className = 'active';
@@ -1933,7 +2059,7 @@ function openToPayEditor(item) {
         type = val;
         seg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
-        repeatEndF.style.display = (val === 'repeat') ? 'flex' : 'none';
+        repeatEndF.style.display = (val === 'repeat' || val === 'debt') ? 'flex' : 'none';
       };
       seg.appendChild(b);
     });
@@ -1942,7 +2068,7 @@ function openToPayEditor(item) {
 
     const repeatEndF = document.createElement('div');
     repeatEndF.className = 'field';
-    repeatEndF.style.display = (type === 'repeat') ? 'flex' : 'none';
+    repeatEndF.style.display = (type === 'repeat' || type === 'debt') ? 'flex' : 'none';
     repeatEndF.innerHTML = '<label>Repeat until</label>' +
       '<input class="date-input" id="tp-repeat-end" type="text" inputmode="numeric" ' +
         'placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(item.repeatUntil) + '">';
@@ -1950,9 +2076,32 @@ function openToPayEditor(item) {
     const repInput = repeatEndF.querySelector('#tp-repeat-end');
     repInput.addEventListener('input', () => autoSlashDate(repInput));
 
+    const tagF = document.createElement('div');
+    tagF.className = 'field';
+    tagF.style.flexDirection = 'column';
+    tagF.style.alignItems = 'flex-start';
+    tagF.innerHTML = '<label style="margin-bottom:8px;">Who pays?</label>';
+    const tagSeg = document.createElement('div');
+    tagSeg.className = 'segmented';
+    tagSeg.style.width = '100%';
+    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.flex = '1';
+      if (item.tag === val) b.className = 'active';
+      b.onclick = () => {
+        item.tag = val;
+        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+      };
+      tagSeg.appendChild(b);
+    });
+    tagF.appendChild(tagSeg);
+    body.appendChild(tagF);
+
     const info = document.createElement('div');
     info.className = 'hint';
-    info.textContent = 'Subscription = repeats every month forever. Repeat = repeats every month until the date you set.';
+    info.textContent = 'Subscription = repeats forever. Repeat = repeats until date. Debt = same as repeat.';
     body.appendChild(info);
 
     footer.innerHTML = '';
@@ -1968,13 +2117,13 @@ function openToPayEditor(item) {
 
       const dueStr = document.getElementById('tp-due').value;
       const dueISO = dueStr ? ddmmyyyyToISO(dueStr) : '';
-      if ((type === 'subscription' || type === 'repeat') && !dueISO) {
+      if ((type === 'subscription' || type === 'repeat' || type === 'debt') && !dueISO) {
         toast('Recurring items need a valid due date'); return;
       }
       if (dueStr && !dueISO) { toast('Invalid date — use DD/MM/YYYY'); return; }
 
       let repeatUntilISO = '';
-      if (type === 'repeat') {
+      if (type === 'repeat' || type === 'debt') {
         const repStr = document.getElementById('tp-repeat-end').value;
         repeatUntilISO = repStr ? ddmmyyyyToISO(repStr) : '';
         if (!repeatUntilISO) { toast('Repeat needs a valid end date'); return; }
@@ -1984,7 +2133,9 @@ function openToPayEditor(item) {
         name, amount, dueDate: dueISO,
         isSubscription: type === 'subscription',
         isRepeat: type === 'repeat',
+        isDebt: type === 'debt',
         repeatUntil: repeatUntilISO || '',
+        tag: item.tag
       };
       closeSheet();
       if (isNew) {
@@ -2011,20 +2162,31 @@ function openToPayEditor(item) {
 }
 
 /* ---------- 25. history helpers ---------- */
-async function ensureHistoryRowForCurrentPeriod() {
-  const settings = App.settings || DEFAULT_SETTINGS;
-  const period = computeCurrentPeriod(settings.periodStartDay);
+async function syncCurrentHistoryBudget(settingsOverride) {
+  const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
+  const period = computeCurrentPeriod(s.periodStartDay);
+  const budgetNow = Number(s.totalBudget) || 0;
   const ref = FB.doc(historyCol(), period.key);
-  const snap = await FB.getDoc(ref);
-  if (!snap.exists()) {
-    await FB.setDoc(ref, {
-      periodKey: period.key,
-      periodLabel: period.label,
-      budgetSnapshot: Number(settings.totalBudget) || 0,
-      totalSpent: 0,
-    });
-  }
-  await recomputeHistoryTotal(period.key);
+  try {
+    const snap = await FB.getDoc(ref);
+    if (!snap.exists()) {
+      await FB.setDoc(ref, {
+        periodKey: period.key,
+        periodLabel: period.label,
+        budgetSnapshot: budgetNow,
+        totalSpent: 0,
+      });
+    } else {
+      const data = snap.data();
+      if (data.budgetSnapshot !== budgetNow || data.periodLabel !== period.label) {
+        await FB.updateDoc(ref, {
+          periodLabel: period.label,
+          budgetSnapshot: budgetNow,
+        });
+      }
+    }
+    await recomputeHistoryTotal(period.key);
+  } catch (e) { console.error('syncCurrentHistoryBudget:', e); }
 }
 async function recomputeHistoryTotal(periodKey) {
   if (!periodKey) return;
@@ -2065,6 +2227,23 @@ function computeCurrentPeriod(startDay) {
     key, year: startDate.getFullYear(),
     start: startDate.toISOString(), end: endDate.toISOString(),
     label, daysTotal, daysLeft,
+  };
+}
+function computePreviousPeriod(currentPeriod) {
+  const d = parseLocalDate(currentPeriod.start);
+  const prevStart = addOneMonth(d); prevStart.setMonth(prevStart.getMonth() - 2);
+  return computeCurrentPeriodForDate(prevStart, App.settings.periodStartDay);
+}
+function computeCurrentPeriodForDate(date, startDay) {
+  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+  let sYear = y, sMonth = m;
+  if (d < startDay) { const prev = new Date(y, m - 1, 1); sYear = prev.getFullYear(); sMonth = prev.getMonth(); }
+  const startDate = clampDay(sYear, sMonth, startDay);
+  const nextStart = clampDay(sYear, sMonth + 1, startDay);
+  const endDate = new Date(nextStart); endDate.setDate(endDate.getDate() - 1);
+  return {
+    key: pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1),
+    label: formatPeriodLabel(startDate, endDate),
   };
 }
 function clampDay(year, month0, day) {

@@ -11,6 +11,7 @@
   import {
     getAuth, GoogleAuthProvider, signInWithPopup,
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
+    sendPasswordResetEmail, updateEmail, reauthenticateWithCredential, EmailAuthProvider,
     signOut, onAuthStateChanged
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import {
@@ -35,6 +36,7 @@
     app, auth, db,
     GoogleAuthProvider, signInWithPopup,
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
+    sendPasswordResetEmail, updateEmail, reauthenticateWithCredential, EmailAuthProvider,
     signOut, onAuthStateChanged,
     collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc,
     setDoc, getDoc, getDocs, query, where, orderBy, serverTimestamp
@@ -67,6 +69,7 @@
 
       <button id="login-btn" class="login-primary">Sign in</button>
       <button id="signup-btn" class="login-secondary">Create account</button>
+      <button id="forgot-pw-btn" class="login-secondary" style="color:var(--text2);font-size:13px;margin-top:10px;">Forgot password?</button>
 
       <div class="login-divider">or</div>
 
@@ -79,11 +82,6 @@
         </svg>
         Sign in with Google
       </button>
-
-      <p class="login-hint">
-        Each of you creates their own account here.<br>
-        Everyone lands on the same shared budget.
-      </p>
     </div>
   </div>
 
