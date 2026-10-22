@@ -16,7 +16,8 @@ const DEFAULT_SETTINGS = {
   periodStartDay: 25, toPayResetDay: 'last',
   timezone: 'Europe/Stockholm',
   members: {}, lastResetKey: null,
-  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' }
+  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' },
+  buyLists: [{ id: 'default', name: 'General' }]
 };
 
 const DEFAULT_USER_SETTINGS = {
@@ -176,6 +177,10 @@ async function startApp() {
       App.settings = DEFAULT_SETTINGS;
     } else {
       App.settings = snap.data();
+      if (!App.settings.buyLists) {
+        await FB.updateDoc(budgetDoc(), { buyLists: DEFAULT_SETTINGS.buyLists });
+        App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
+      }
     }
   } catch (e) { console.error('budget doc:', e); }
 
@@ -251,6 +256,7 @@ function attachListeners() {
   App.listeners.push(FB.onSnapshot(budgetDoc(), (snap) => {
     if (snap.exists()) {
       App.settings = snap.data();
+      if (!App.settings.buyLists) App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
       if (App.user && App.settings.members && App.settings.members[App.user.uid]) {
         App.userSettings = { ...DEFAULT_USER_SETTINGS, ...App.settings.members[App.user.uid] };
       } else {
@@ -451,14 +457,14 @@ function applyThemeAndTone() {
 function applyPillColors() {
   if (!App.settings || !App.settings.pillColors) return;
   const pc = App.settings.pillColors;
-  document.documentElement.style.setProperty('--pill-sub-bg', 'var(--cat-' + pc.sub + '-soft)');
-  document.documentElement.style.setProperty('--pill-sub-cl', 'var(--cat-' + pc.sub + ')');
-  document.documentElement.style.setProperty('--pill-rep-bg', 'var(--cat-' + pc.rep + '-soft)');
-  document.documentElement.style.setProperty('--pill-rep-cl', 'var(--cat-' + pc.rep + ')');
-  document.documentElement.style.setProperty('--pill-debt-bg', 'var(--cat-' + pc.debt + '-soft)');
-  document.documentElement.style.setProperty('--pill-debt-cl', 'var(--cat-' + pc.debt + ')');
-  document.documentElement.style.setProperty('--pill-pin-bg', 'var(--cat-' + pc.pin + '-soft)');
-  document.documentElement.style.setProperty('--pill-pin-cl', 'var(--cat-' + pc.pin + ')');
+  document.documentElement.style.setProperty('--pill-sub-bg', `var(--cat-${pc.sub}-soft)`);
+  document.documentElement.style.setProperty('--pill-sub-cl', `var(--cat-${pc.sub})`);
+  document.documentElement.style.setProperty('--pill-rep-bg', `var(--cat-${pc.rep}-soft)`);
+  document.documentElement.style.setProperty('--pill-rep-cl', `var(--cat-${pc.rep})`);
+  document.documentElement.style.setProperty('--pill-debt-bg', `var(--cat-${pc.debt}-soft)`);
+  document.documentElement.style.setProperty('--pill-debt-cl', `var(--cat-${pc.debt})`);
+  document.documentElement.style.setProperty('--pill-pin-bg', `var(--cat-${pc.pin}-soft)`);
+  document.documentElement.style.setProperty('--pill-pin-cl', `var(--cat-${pc.pin})`);
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
@@ -782,7 +788,6 @@ ScreenRenderers.buy = function () {
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Shopping list,', 'Buy'));
 
-  // Lists Selector
   const selector = document.createElement('div');
   selector.className = 'list-selector';
   lists.forEach(l => {
@@ -791,14 +796,8 @@ ScreenRenderers.buy = function () {
     chip.textContent = l.name;
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
     chip.oncontextmenu = (e) => { e.preventDefault(); openListMenu(l); };
-    
-    let t = null;
-    chip.addEventListener('touchstart', () => { t = setTimeout(() => openListMenu(l), 600); });
-    chip.addEventListener('touchend', () => clearTimeout(t));
-    
     selector.appendChild(chip);
   });
-  
   const addChip = document.createElement('div');
   addChip.className = 'list-chip';
   addChip.textContent = '＋';
@@ -875,7 +874,6 @@ function openNewListEditor() {
     f.className = 'field';
     f.innerHTML = '<label>List Name</label><input id="nl-name" placeholder="e.g. Hardware">';
     body.appendChild(f);
-    
     footer.innerHTML = '';
     const btn = document.createElement('button');
     btn.className = 'primary';
@@ -1109,7 +1107,6 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
     myToPay = periodExpenses.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100);
   }
 
-  // Return leftover budget
   const leftover = totalBudget - totalSpent;
   const myReturn = leftover * (us.budgetMethod === 'pct' ? (Number(us.budgetPct)/100) : (Number(us.budgetFixed)/totalBudget || 0));
 
@@ -1160,7 +1157,6 @@ ScreenRenderers.saved = function () {
       el.className = 'goal-card';
       el.style.borderLeftColor = 'var(--cat-' + (g.colorKey || 'green') + ')';
       
-      // fallback for accent color in dark mode
       if (document.body.getAttribute('data-theme') === 'dark') {
         el.style.borderLeftColor = 'var(--cat-' + (g.colorKey || 'green') + ')';
       }
@@ -1611,9 +1607,10 @@ function showGoalSheet(g, isNew) {
     iconEl.className = 'v4-icon';
     iconEl.textContent = g.icon || '🎯';
     iconEl.onclick = () => {
-      buildIconPickerInline(g.icon || '🎯', (emoji) => {
+      buildIconPickerInline(g.icon || '🎯', async (emoji) => {
         g.icon = emoji;
         iconEl.textContent = emoji;
+        if (!isNew) await FB.updateDoc(FB.doc(goalsCol(), g.id), { icon: emoji });
       });
     };
     heroDiv.appendChild(iconEl);
@@ -1641,7 +1638,6 @@ function showGoalSheet(g, isNew) {
     const dInp = dateRow.querySelector('#g-date');
     dInp.addEventListener('input', () => autoSlashDate(dInp));
 
-    // Accent Color Picker
     const colorRow = document.createElement('div');
     colorRow.className = 'v4-row';
     colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
@@ -1693,7 +1689,7 @@ function showGoalSheet(g, isNew) {
     }
     
     body.appendChild(actionsDiv);
-    footer.innerHTML = ''; // Hide default footer
+    footer.innerHTML = '';
   });
 }
 
@@ -2402,4 +2398,22 @@ async function cleanupOldExpenses() {
 document.getElementById('fab').addEventListener('click', () => {
   if (App.screen === 'home') openExpenseEditor(null);
   else if (App.screen === 'topay') openToPayEditor(null);
+});
+
+// Auto-clear inputs on focus, restore on blur if empty
+document.addEventListener('focusin', (e) => {
+  if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
+    if (!e.target.dataset.original && e.target.value) {
+      e.target.dataset.original = e.target.value;
+      e.target.value = '';
+    }
+  }
+});
+document.addEventListener('focusout', (e) => {
+  if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
+    if (e.target.value.trim() === '' && e.target.dataset.original) {
+      e.target.value = e.target.dataset.original;
+    }
+    delete e.target.dataset.original;
+  }
 });

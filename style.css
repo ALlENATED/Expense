@@ -188,7 +188,6 @@ input[type="number"]{-moz-appearance:textfield;}
 .pin .bar-in>div{height:100%;background:var(--cat);border-radius:20px;}
 .pin .bar-pct{font-size:9px;font-weight:800;color:var(--cat);flex-shrink:0;}
 
-/* MANUAL PINNED SIZING */
 .pin-grid[data-count="1"] .pin .v { font-size: 30px; }
 .pin-grid[data-count="1"] .pin .name-tag { font-size: 15px; }
 .pin-grid[data-count="1"] .pin .small { font-size: 13px; }
@@ -429,7 +428,7 @@ input[type="number"]{-moz-appearance:textfield;}
 .hero-last-month .k{font-size:12px;font-weight:600;opacity:.85;}
 .hero-last-month .v{font-size:15px;font-weight:800;}
 
-.goal-card{background:var(--card);border-radius:20px;padding:16px;box-shadow:var(--shadow);margin-bottom:10px;cursor:pointer;transition:transform .1s;}
+.goal-card{background:var(--card);border-radius:20px;padding:16px;box-shadow:var(--shadow);margin-bottom:10px;cursor:pointer;transition:transform .1s;border-left:4px solid var(--green);}
 .goal-card:active{transform:scale(.98);}
 .goal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
 .goal-name{font-size:16px;font-weight:700;display:flex;align-items:center;gap:6px;}
