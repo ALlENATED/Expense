@@ -22,8 +22,9 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_USER_SETTINGS = {
   theme: 'system', heroTone: 'forest', pins: [],
-  salary: 0, budgetMethod: 'fixed', budgetFixed: 0, budgetPct: 50,
-  toPayMethod: 'tagged', toPayFixed: 0, toPayPct: 50,
+  salary: 0,
+  budgetMethod: 'fixed', budgetFixed: 0, budgetPct: 50,
+  toPayMethod: 'fixed', toPayFixed: 0, toPayPct: 50,
   trackSavings: false
 };
 
@@ -235,8 +236,8 @@ async function migrateUserSettings() {
   let migrated = false;
   const updates = {};
 
-  if (!me.theme) { updates[`members.${uid}.theme`] = App.settings.theme || 'system'; migrated = true; }
-  if (!me.heroTone) { updates[`members.${uid}.heroTone`] = App.settings.heroTone || 'forest'; migrated = true; }
+  if (!me.theme) { updates[`members.${uid}.theme`] = 'system'; migrated = true; }
+  if (!me.heroTone) { updates[`members.${uid}.heroTone`] = 'forest'; migrated = true; }
   if (!me.pins) {
     try {
       const catsSnap = await FB.getDocs(categoriesCol());
@@ -454,17 +455,35 @@ function applyThemeAndTone() {
     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.body.setAttribute('data-theme', theme);
 }
+
+/* Rewrites CSS vars from the settings saved in Firestore.
+   Works in both modes because the palette uses the .c-X class
+   which has both light and dark variants. */
 function applyPillColors() {
   if (!App.settings || !App.settings.pillColors) return;
   const pc = App.settings.pillColors;
-  document.documentElement.style.setProperty('--pill-sub-bg', `var(--cat-${pc.sub}-soft)`);
-  document.documentElement.style.setProperty('--pill-sub-cl', `var(--cat-${pc.sub})`);
-  document.documentElement.style.setProperty('--pill-rep-bg', `var(--cat-${pc.rep}-soft)`);
-  document.documentElement.style.setProperty('--pill-rep-cl', `var(--cat-${pc.rep})`);
-  document.documentElement.style.setProperty('--pill-debt-bg', `var(--cat-${pc.debt}-soft)`);
-  document.documentElement.style.setProperty('--pill-debt-cl', `var(--cat-${pc.debt})`);
-  document.documentElement.style.setProperty('--pill-pin-bg', `var(--cat-${pc.pin}-soft)`);
-  document.documentElement.style.setProperty('--pill-pin-cl', `var(--cat-${pc.pin})`);
+  const root = document.documentElement;
+  // Create hidden probes for each color so we can read the computed value
+  // without touching the CSS class system. Simpler: read via a temp div.
+  const readColor = (key, variant) => {
+    const el = document.createElement('div');
+    el.className = 'c-' + key;
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    const cs = getComputedStyle(el);
+    const val = variant === 'soft' ? cs.getPropertyValue('--cat-soft').trim()
+                                    : cs.getPropertyValue('--cat').trim();
+    document.body.removeChild(el);
+    return val;
+  };
+  root.style.setProperty('--pill-sub-bg', readColor(pc.sub, 'soft'));
+  root.style.setProperty('--pill-sub-cl', readColor(pc.sub, 'cat'));
+  root.style.setProperty('--pill-rep-bg', readColor(pc.rep, 'soft'));
+  root.style.setProperty('--pill-rep-cl', readColor(pc.rep, 'cat'));
+  root.style.setProperty('--pill-debt-bg', readColor(pc.debt, 'soft'));
+  root.style.setProperty('--pill-debt-cl', readColor(pc.debt, 'cat'));
+  root.style.setProperty('--pill-pin-bg', readColor(pc.pin, 'soft'));
+  root.style.setProperty('--pill-pin-cl', readColor(pc.pin, 'cat'));
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
@@ -479,7 +498,7 @@ function getAvatarHtml(uid, size = '32px') {
   const grad = isMe ? 'av-b' : 'av-a';
   const meClass = isMe ? 'me' : '';
   if (m.avatarBase64) {
-    return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};background-image:url(${m.avatarBase64});"></div>`;
+    return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};background-image:url(${m.avatarBase64});background-size:cover;background-position:center;"></div>`;
   }
   return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${parseInt(size)*0.4}px;">${initials}</div>`;
 }
@@ -559,6 +578,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
+/* ---------- HOME ---------- */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -690,6 +710,7 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
+/* ---------- CATEGORIES ---------- */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -773,11 +794,15 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
+/* ---------- BUY ---------- */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General' }];
-  const currentListId = App.activeBuyList || 'default';
-  
+  // Fallback if activeBuyList was deleted
+  const validListIds = lists.map(l => l.id);
+  if (!validListIds.includes(App.activeBuyList)) App.activeBuyList = validListIds[0];
+
+  const currentListId = App.activeBuyList;
   const items = App.buy
     .filter(x => (x.listId || 'default') === currentListId)
     .sort((a, b) => {
@@ -796,6 +821,9 @@ ScreenRenderers.buy = function () {
     chip.textContent = l.name;
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
     chip.oncontextmenu = (e) => { e.preventDefault(); openListMenu(l); };
+    let t = null;
+    chip.addEventListener('touchstart', () => { t = setTimeout(() => openListMenu(l), 600); });
+    chip.addEventListener('touchend', () => clearTimeout(t));
     selector.appendChild(chip);
   });
   const addChip = document.createElement('div');
@@ -882,9 +910,13 @@ function openNewListEditor() {
       const name = document.getElementById('nl-name').value.trim();
       if (!name) return;
       const lists = App.settings.buyLists || [{ id: 'default', name: 'General' }];
-      lists.push({ id: 'list_' + Date.now(), name });
+      const newList = { id: 'list_' + Date.now(), name };
+      lists.push(newList);
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
+      App.activeBuyList = newList.id;
       closeSheet();
+      // Re-render with the new list active
+      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
   });
@@ -912,6 +944,7 @@ function openListMenu(l) {
         for (const x of App.buy.filter(x => x.listId === l.id)) await FB.deleteDoc(FB.doc(buyCol(), x.id));
         const lists = App.settings.buyLists.filter(x => x.id !== l.id);
         await FB.updateDoc(budgetDoc(), { buyLists: lists });
+        if (App.activeBuyList === l.id) App.activeBuyList = 'default';
         closeSheet();
       };
       footer.appendChild(del);
@@ -926,6 +959,7 @@ function toggleBuy(item) {
   });
 }
 
+/* ---------- TO PAY ---------- */
 ScreenRenderers.topay = function () {
   const items = App.toPay.slice();
   const sortKey = (x) => { if (x.paid) return 3; if (x.dueDate) return 1; return 2; };
@@ -988,8 +1022,6 @@ ScreenRenderers.topay = function () {
           tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}</div>`;
         } else if (item.tag === 'joint') {
           tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(App.user.uid)}</div>`;
-        } else if (item.tag === 'custom') {
-          tagHtml = `<div class="tag-avs" style="font-size:11px;font-weight:700;color:var(--text2);">Custom</div>`;
         }
       }
 
@@ -1016,6 +1048,7 @@ function togglePaid(item) {
   });
 }
 
+/* ---------- HISTORY ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1075,7 +1108,8 @@ ScreenRenderers.history = function () {
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
-        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
+        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
+        '<button class="delete-btn" onclick="event.stopPropagation();deleteHistory(\'' + r.id + '\',\'' + r.periodLabel.replace(/'/g, '') + '\')">×</button>';
       wrap.appendChild(card);
     });
   }
@@ -1091,31 +1125,33 @@ ScreenRenderers.history = function () {
   return wrap;
 };
 
+window.deleteHistory = async function(id, label) {
+  if (!confirm('Delete the record for "' + label + '"? This cannot be undone.')) return;
+  await FB.deleteDoc(FB.doc(historyCol(), id));
+  toast('History entry deleted');
+};
+
 function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
-  let share = us.budgetMethod === 'pct' ? totalBudget * (Number(us.budgetPct) / 100) : Number(us.budgetFixed) || 0;
+  let share = us.budgetMethod === 'pct'
+    ? totalBudget * (Number(us.budgetPct) / 100)
+    : Number(us.budgetFixed) || 0;
   const periodExpenses = App.toPay.filter(x => !x.paid);
   let myToPay = 0;
-  
-  if (us.toPayMethod === 'tagged') {
-    myToPay = periodExpenses.filter(x => x.tag === 'me').reduce((a, x) => a + Number(x.amount || 0), 0);
-    const jointItems = periodExpenses.filter(x => x.tag === 'joint');
-    const jointTotal = jointItems.reduce((a, x) => a + Number(x.amount || 0), 0);
-    myToPay += jointTotal * (us.budgetMethod === 'pct' ? (Number(us.budgetPct)/100) : (Number(us.budgetFixed)/totalBudget || 0));
-  } else if (us.toPayMethod === 'fixed') {
-    myToPay = Number(us.toPayFixed) || 0;
-  } else {
+  if (us.toPayMethod === 'pct') {
     myToPay = periodExpenses.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100);
+  } else {
+    myToPay = Number(us.toPayFixed) || 0;
   }
-
   const leftover = totalBudget - totalSpent;
-  const myReturn = leftover * (us.budgetMethod === 'pct' ? (Number(us.budgetPct)/100) : (Number(us.budgetFixed)/totalBudget || 0));
-
+  const myReturn = leftover * (us.budgetMethod === 'pct'
+    ? (Number(us.budgetPct)/100)
+    : (Number(us.budgetFixed)/totalBudget || 0));
   return share + myToPay - myReturn;
 }
 
+/* ---------- SAVED ---------- */
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
-  const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   const lastPeriod = computePreviousPeriod(period);
   
@@ -1151,19 +1187,28 @@ ScreenRenderers.saved = function () {
     empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
     wrap.appendChild(empty);
   } else {
+    const members = Object.keys(App.settings?.members || {});
+    const myUid = App.user?.uid;
     App.goals.forEach(g => {
       const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
+      const colorVar = 'var(--cat-' + (g.colorKey || 'green') + ')';
       const el = document.createElement('div');
       el.className = 'goal-card';
-      el.style.borderLeftColor = 'var(--cat-' + (g.colorKey || 'green') + ')';
-      
-      if (document.body.getAttribute('data-theme') === 'dark') {
-        el.style.borderLeftColor = 'var(--cat-' + (g.colorKey || 'green') + ')';
+      el.style.setProperty('--accent', colorVar);
+
+      let tagHtml = '';
+      if (g.tag === 'me') tagHtml = `<span class="tag-avs">${getAvatarHtml(myUid)}</span>`;
+      else if (g.tag === 'partner') {
+        const otherUid = members.find(u => u !== myUid);
+        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}</span>`;
+      } else if (g.tag === 'joint') {
+        const otherUid = members.find(u => u !== myUid);
+        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(myUid)}</span>`;
       }
 
       el.innerHTML =
         '<div class="goal-top">' +
-          '<div class="goal-name">' + esc(g.icon || '🎯') + ' ' + esc(g.name) + ' <span class="chev">›</span></div>' +
+          '<div class="goal-name">' + esc(g.icon || '🎯') + ' ' + esc(g.name) + ' ' + tagHtml + ' <span class="chev">›</span></div>' +
           '<div class="goal-badge">' + (pct >= 100 ? 'Reached' : 'On Track') + '</div>' +
         '</div>' +
         '<div class="goal-nums"><span><b>' + fmtAmount(g.current) + '</b> / ' + fmtAmount(g.target) + '</span><span>' + pct + '%</span></div>' +
@@ -1197,8 +1242,8 @@ ScreenRenderers.saved = function () {
     hc.innerHTML = 
       '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(saved) + '</span></div>' +
       `<div class="hist-split-row">` +
-        `<div class="p">${getAvatarHtml(otherUid)} ${fmtAmount(partnerSaved)}</div>` +
-        `<div class="p right">${fmtAmount(mySaved)} ${getAvatarHtml(App.user.uid)}</div>` +
+        `<div class="p">${getAvatarHtml(otherUid, '24px')} ${fmtAmount(partnerSaved)}</div>` +
+        `<div class="p right">${fmtAmount(mySaved)} ${getAvatarHtml(App.user.uid, '24px')}</div>` +
       `</div>`;
     wrap.appendChild(hc);
   });
@@ -1210,6 +1255,7 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
+/* ---------- SETTINGS ---------- */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1240,8 +1286,49 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(sectionTitle('My Finances'));
   const mg = group();
   mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
-  mg.appendChild(rowInput('My Budget Contribution', 'set-budget-fixed', us.budgetFixed || 0));
-  mg.appendChild(rowInput('My To Pay Fixed', 'set-topay-fixed', us.toPayFixed || 0));
+
+  // Budget contribution method + value
+  const budgetMethodRow = document.createElement('div');
+  budgetMethodRow.className = 'row';
+  budgetMethodRow.innerHTML = '<span class="lbl">My Budget Contribution</span>' +
+    '<div class="segmented" id="budget-method-seg">' +
+      '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+      '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
+    '</div>';
+  mg.appendChild(budgetMethodRow);
+  setTimeout(() => {
+    budgetMethodRow.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        const m = b.dataset.method;
+        updateUserSetting('budgetMethod', m);
+        renderScreen('settings');
+      };
+    });
+  }, 0);
+  mg.appendChild(rowInput(us.budgetMethod === 'pct' ? 'Budget %' : 'Budget Amount', 'set-budget-fixed',
+    us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)));
+
+  // To Pay contribution method + value
+  const toPayMethodRow = document.createElement('div');
+  toPayMethodRow.className = 'row';
+  toPayMethodRow.innerHTML = '<span class="lbl">My To Pay Share</span>' +
+    '<div class="segmented" id="topay-method-seg">' +
+      '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+      '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
+    '</div>';
+  mg.appendChild(toPayMethodRow);
+  setTimeout(() => {
+    toPayMethodRow.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        const m = b.dataset.method;
+        updateUserSetting('toPayMethod', m);
+        renderScreen('settings');
+      };
+    });
+  }, 0);
+  mg.appendChild(rowInput(us.toPayMethod === 'pct' ? 'To Pay %' : 'To Pay Amount', 'set-topay-fixed',
+    us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)));
+
   mg.appendChild(rowToggle('Track savings', us.trackSavings, (el) => {
     if (!us.salary) { toast('Enter a salary first'); el.classList.remove('on'); return; }
     updateUserSetting('trackSavings', el.classList.contains('on'));
@@ -1274,29 +1361,16 @@ ScreenRenderers.settings = function () {
   toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
   appear.appendChild(toneRow);
 
-  const subRow = document.createElement('div');
-  subRow.className = 'row';
-  subRow.innerHTML = '<span class="lbl">Subscription Pill</span><div class="swatch" style="background:var(--pill-sub-cl);"></div>';
-  subRow.onclick = () => openPillColorPicker('sub');
-  appear.appendChild(subRow);
-
-  const repRow = document.createElement('div');
-  repRow.className = 'row';
-  repRow.innerHTML = '<span class="lbl">Repeat Pill</span><div class="swatch" style="background:var(--pill-rep-cl);"></div>';
-  repRow.onclick = () => openPillColorPicker('rep');
-  appear.appendChild(repRow);
-
-  const debtRow = document.createElement('div');
-  debtRow.className = 'row';
-  debtRow.innerHTML = '<span class="lbl">Debt Pill</span><div class="swatch" style="background:var(--pill-debt-cl);"></div>';
-  debtRow.onclick = () => openPillColorPicker('debt');
-  appear.appendChild(debtRow);
-
-  const pinRow = document.createElement('div');
-  pinRow.className = 'row';
-  pinRow.innerHTML = '<span class="lbl">Pin Pill</span><div class="swatch" style="background:var(--pill-pin-cl);"></div>';
-  pinRow.onclick = () => openPillColorPicker('pin');
-  appear.appendChild(pinRow);
+  ['sub','rep','debt','pin'].forEach(type => {
+    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill', pin: 'Pin Pill' }[type];
+    const row = document.createElement('div');
+    row.className = 'row';
+    const pc = s.pillColors || {};
+    const colorKey = pc[type] || 'blue';
+    row.innerHTML = '<span class="lbl">' + label + '</span><div class="swatch c-' + colorKey + '"></div>';
+    row.onclick = () => openPillColorPicker(type);
+    appear.appendChild(row);
+  });
 
   wrap.appendChild(appear);
 
@@ -1357,9 +1431,15 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
   setTimeout(() => {
-    bindInput('set-salary',  v => updateUserSetting('salary', Number(v) || 0));
-    bindInput('set-budget-fixed', v => updateUserSetting('budgetFixed', Number(v) || 0));
-    bindInput('set-topay-fixed', v => updateUserSetting('toPayFixed', Number(v) || 0));
+    bindInput('set-salary', v => updateUserSetting('salary', Number(v) || 0));
+    bindInput('set-budget-fixed', v => {
+      if (us.budgetMethod === 'pct') updateUserSetting('budgetPct', Number(v) || 0);
+      else updateUserSetting('budgetFixed', Number(v) || 0);
+    });
+    bindInput('set-topay-fixed', v => {
+      if (us.toPayMethod === 'pct') updateUserSetting('toPayPct', Number(v) || 0);
+      else updateUserSetting('toPayFixed', Number(v) || 0);
+    });
     bindInput('set-startday', v => {
       const n = parseInt(v, 10);
       if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
@@ -1415,6 +1495,7 @@ function changeTheme(theme) {
   });
 }
 
+/* ---------- SAFETY / DATA ---------- */
 function exportData() {
   const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1492,6 +1573,7 @@ async function confirmHardReset() {
   } catch (e) { toast('Reset failed: ' + e.message); }
 }
 
+/* ---------- PROFILE ---------- */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -1588,8 +1670,9 @@ function resizeImageToBase64(file, size) {
   });
 }
 
+/* ---------- GOALS (V4 + accent + tag) ---------- */
 function openGoalEditor() {
-  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green' };
+  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tag: 'joint' };
   showGoalSheet(g, true);
 }
 function openGoalSheet(g) {
@@ -1638,6 +1721,7 @@ function showGoalSheet(g, isNew) {
     const dInp = dateRow.querySelector('#g-date');
     dInp.addEventListener('input', () => autoSlashDate(dInp));
 
+    // Accent color
     const colorRow = document.createElement('div');
     colorRow.className = 'v4-row';
     colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
@@ -1646,9 +1730,34 @@ function showGoalSheet(g, isNew) {
         g.colorKey = newKey;
         const sw = colorRow.querySelector('.swatch');
         sw.className = 'swatch c-' + newKey;
+        if (!isNew) FB.updateDoc(FB.doc(goalsCol(), g.id), { colorKey: newKey });
       });
     };
     body.appendChild(colorRow);
+
+    // Tag (Me / Partner / Joint)
+    const tagRow = document.createElement('div');
+    tagRow.className = 'v4-row';
+    tagRow.style.flexDirection = 'column';
+    tagRow.style.alignItems = 'flex-start';
+    tagRow.innerHTML = '<label style="margin-bottom:8px;">Who is this goal for?</label>';
+    const tagSeg = document.createElement('div');
+    tagSeg.className = 'segmented';
+    tagSeg.style.width = '100%';
+    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.flex = '1';
+      if ((g.tag || 'joint') === val) b.className = 'active';
+      b.onclick = () => {
+        g.tag = val;
+        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+      };
+      tagSeg.appendChild(b);
+    });
+    tagRow.appendChild(tagSeg);
+    body.appendChild(tagRow);
 
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'v4-actions';
@@ -1665,12 +1774,14 @@ function showGoalSheet(g, isNew) {
       closeSheet();
       if (isNew) {
         await FB.addDoc(goalsCol(), {
-          name, icon: g.icon, target, current: 0, autoAmount: Number(g.autoAmount) || 0, targetDate, colorKey: g.colorKey,
+          name, icon: g.icon, target, current: 0,
+          autoAmount: Number(g.autoAmount) || 0,
+          targetDate, colorKey: g.colorKey, tag: g.tag || 'joint',
           createdAt: new Date().toISOString()
         });
       } else {
         await FB.updateDoc(FB.doc(goalsCol(), g.id), {
-          name, icon: g.icon, target, targetDate, colorKey: g.colorKey
+          name, icon: g.icon, target, targetDate, colorKey: g.colorKey, tag: g.tag || 'joint'
         });
       }
     };
@@ -1693,6 +1804,7 @@ function showGoalSheet(g, isNew) {
   });
 }
 
+/* ---------- CATEGORY EDITOR ---------- */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
@@ -1813,6 +1925,7 @@ function openCategoryEditor(cat) {
   });
 }
 
+/* ---------- COLOR PICKERS ---------- */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -1849,13 +1962,14 @@ function openPillColorPicker(type) {
     body.innerHTML = '<h3>Pick Pill Color</h3>';
     const grid = document.createElement('div');
     grid.className = 'palette-grid';
-    const current = (App.settings.pillColors && App.settings.pillColors[type]) || 'blue';
+    const pc = (App.settings && App.settings.pillColors) || {};
+    const current = pc[type] || 'blue';
     PALETTE.forEach(key => {
       const chip = document.createElement('div');
       chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
       chip.onclick = async () => {
-        const pc = { ...(App.settings.pillColors || {}), [type]: key };
-        await saveSetting('pillColors', pc);
+        const newPC = { ...(App.settings.pillColors || {}), [type]: key };
+        await saveSetting('pillColors', newPC);
         closeSheet();
       };
       grid.appendChild(chip);
@@ -1864,6 +1978,7 @@ function openPillColorPicker(type) {
   });
 }
 
+/* ---------- ICON PICKER ---------- */
 const ICONS = {
   'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
   'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
@@ -1949,6 +2064,7 @@ function buildIconPickerInline(current, onPick) {
   });
 }
 
+/* ---------- TONE PICKER ---------- */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -1996,6 +2112,7 @@ function openTonePicker(currentKey) {
   });
 }
 
+/* ---------- EXPENSE EDITOR ---------- */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2071,6 +2188,7 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
+/* ---------- TO PAY EDITOR ---------- */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = { name: '', amount: null, dueDate: '', paid: false, paidDate: null, isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '', tag: 'joint' };
@@ -2188,6 +2306,7 @@ function openToPayEditor(item) {
   });
 }
 
+/* ---------- HISTORY HELPERS ---------- */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -2216,6 +2335,7 @@ async function recomputeHistoryTotal(periodKey) {
   if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
 }
 
+/* ---------- PERIODS ---------- */
 function computeCurrentPeriod(startDay) {
   startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const now = new Date();
@@ -2272,6 +2392,7 @@ function labelForDay(iso) {
   return full;
 }
 
+/* ---------- RESET DAY PICKER ---------- */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -2388,6 +2509,7 @@ async function maybeAutoReset() {
   await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
 }
 
+/* ---------- AUTO-CLEANUP ---------- */
 async function cleanupOldExpenses() {
   const currentKey = computeCurrentPeriod(App.settings.periodStartDay).key;
   const oldExpenses = App.expenses.filter(e => e.periodKey && e.periodKey < currentKey);
@@ -2395,12 +2517,13 @@ async function cleanupOldExpenses() {
   for (const e of oldExpenses) await FB.deleteDoc(FB.doc(expensesCol(), e.id));
 }
 
+/* ---------- FAB ---------- */
 document.getElementById('fab').addEventListener('click', () => {
   if (App.screen === 'home') openExpenseEditor(null);
   else if (App.screen === 'topay') openToPayEditor(null);
 });
 
-// Auto-clear inputs on focus, restore on blur if empty
+/* ---------- AUTO-CLEAR INPUTS ---------- */
 document.addEventListener('focusin', (e) => {
   if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
     if (!e.target.dataset.original && e.target.value) {
