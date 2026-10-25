@@ -15,9 +15,9 @@ const DEFAULT_SETTINGS = {
   appName: 'Our Budget', currency: 'SEK', totalBudget: 12000,
   periodStartDay: 25, toPayResetDay: 'last',
   timezone: 'Europe/Stockholm',
-  members: {}, lastResetKey: null,
-  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' },
-  buyLists: [{ id: 'default', name: 'General' }]
+  members: {}, owners: [], bannedUids: [], lastResetKey: null,
+  pillColors: { sub: 'blue', rep: 'purple', debt: 'red' },
+  buyLists: [{ id: 'default', name: 'General', colorKey: 'blue' }]
 };
 
 const DEFAULT_USER_SETTINGS = {
@@ -29,12 +29,12 @@ const DEFAULT_USER_SETTINGS = {
 };
 
 const SEED_CATEGORIES = [
-  { name: 'Groceries',     icon: '🛒', limit: 5000, colorKey: 'green',  parentId: '', pinOrder: 0 },
-  { name: 'Transport',     icon: '🚌', limit: 1500, colorKey: 'blue',   parentId: '', pinOrder: 0 },
-  { name: 'Dining out',    icon: '🍽️', limit: 1000, colorKey: 'red',    parentId: '', pinOrder: 0 },
-  { name: 'Utilities',     icon: '💡', limit: 2000, colorKey: 'amber',  parentId: '', pinOrder: 0 },
-  { name: 'Entertainment', icon: '🎬', limit: 1500, colorKey: 'purple', parentId: '', pinOrder: 0 },
-  { name: 'Health',        icon: '💊', limit: 1000, colorKey: 'teal',   parentId: '', pinOrder: 0 },
+  { name: 'Groceries',     icon: '🛒', limit: 5000, colorKey: 'green',  parentId: '' },
+  { name: 'Transport',     icon: '🚌', limit: 1500, colorKey: 'blue',   parentId: '' },
+  { name: 'Dining out',    icon: '🍽️', limit: 1000, colorKey: 'red',    parentId: '' },
+  { name: 'Utilities',     icon: '💡', limit: 2000, colorKey: 'amber',  parentId: '' },
+  { name: 'Entertainment', icon: '🎬', limit: 1500, colorKey: 'purple', parentId: '' },
+  { name: 'Health',        icon: '💊', limit: 1000, colorKey: 'teal',   parentId: '' },
 ];
 
 const TABS = [
@@ -169,18 +169,37 @@ const buyCol        = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'buy');
 const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history');
 const goalsCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'goals');
 
+/* ---------- BOOT ---------- */
 async function startApp() {
   detachListeners();
   try {
     const snap = await FB.getDoc(budgetDoc());
     if (!snap.exists()) {
-      await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
-      App.settings = DEFAULT_SETTINGS;
+      await FB.setDoc(budgetDoc(), { ...DEFAULT_SETTINGS, owners: [App.user.uid] });
+      App.settings = { ...DEFAULT_SETTINGS, owners: [App.user.uid] };
     } else {
       App.settings = snap.data();
-      if (!App.settings.buyLists) {
-        await FB.updateDoc(budgetDoc(), { buyLists: DEFAULT_SETTINGS.buyLists });
-        App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
+      // Fix #9: if banned, sign out
+      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed from this household.');
+        await FB.signOut(FB.auth);
+        return;
+      }
+      // Migrations
+      const updates = {};
+      if (!App.settings.buyLists) updates.buyLists = DEFAULT_SETTINGS.buyLists;
+      if (!App.settings.owners) updates.owners = [App.user.uid];
+      if (!App.settings.bannedUids) updates.bannedUids = [];
+      if (!App.settings.pillColors) updates.pillColors = DEFAULT_SETTINGS.pillColors;
+      // Remove pin from pillColors if it exists
+      if (App.settings.pillColors && App.settings.pillColors.pin) {
+        const pc = { ...App.settings.pillColors };
+        delete pc.pin;
+        updates.pillColors = pc;
+      }
+      if (Object.keys(updates).length) {
+        await FB.updateDoc(budgetDoc(), updates);
+        Object.assign(App.settings, updates);
       }
     }
   } catch (e) { console.error('budget doc:', e); }
@@ -238,25 +257,23 @@ async function migrateUserSettings() {
 
   if (!me.theme) { updates[`members.${uid}.theme`] = 'system'; migrated = true; }
   if (!me.heroTone) { updates[`members.${uid}.heroTone`] = 'forest'; migrated = true; }
-  if (!me.pins) {
-    try {
-      const catsSnap = await FB.getDocs(categoriesCol());
-      updates[`members.${uid}.pins`] = catsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(c => Number(c.pinOrder) > 0)
-        .sort((a, b) => Number(a.pinOrder) - Number(b.pinOrder))
-        .map(c => c.id);
-      migrated = true;
-    } catch(e) {}
-  }
+  if (!me.pins) { updates[`members.${uid}.pins`] = []; migrated = true; }
   if (migrated) await FB.updateDoc(budgetDoc(), updates);
 }
 
+/* ---------- LISTENERS ---------- */
 function attachListeners() {
   const fail = (n) => (e) => console.error('listener ' + n + ':', e);
 
   App.listeners.push(FB.onSnapshot(budgetDoc(), (snap) => {
     if (snap.exists()) {
       App.settings = snap.data();
+      // Fix #9: kicked user auto-signs-out
+      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed.');
+        FB.signOut(FB.auth);
+        return;
+      }
       if (!App.settings.buyLists) App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
       if (App.user && App.settings.members && App.settings.members[App.user.uid]) {
         App.userSettings = { ...DEFAULT_USER_SETTINGS, ...App.settings.members[App.user.uid] };
@@ -321,6 +338,7 @@ function detachListeners() {
   App.listeners = [];
 }
 
+/* ---------- HELPERS ---------- */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -455,16 +473,9 @@ function applyThemeAndTone() {
     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.body.setAttribute('data-theme', theme);
 }
-
-/* Rewrites CSS vars from the settings saved in Firestore.
-   Works in both modes because the palette uses the .c-X class
-   which has both light and dark variants. */
 function applyPillColors() {
   if (!App.settings || !App.settings.pillColors) return;
   const pc = App.settings.pillColors;
-  const root = document.documentElement;
-  // Create hidden probes for each color so we can read the computed value
-  // without touching the CSS class system. Simpler: read via a temp div.
   const readColor = (key, variant) => {
     const el = document.createElement('div');
     el.className = 'c-' + key;
@@ -476,14 +487,12 @@ function applyPillColors() {
     document.body.removeChild(el);
     return val;
   };
-  root.style.setProperty('--pill-sub-bg', readColor(pc.sub, 'soft'));
-  root.style.setProperty('--pill-sub-cl', readColor(pc.sub, 'cat'));
-  root.style.setProperty('--pill-rep-bg', readColor(pc.rep, 'soft'));
-  root.style.setProperty('--pill-rep-cl', readColor(pc.rep, 'cat'));
-  root.style.setProperty('--pill-debt-bg', readColor(pc.debt, 'soft'));
-  root.style.setProperty('--pill-debt-cl', readColor(pc.debt, 'cat'));
-  root.style.setProperty('--pill-pin-bg', readColor(pc.pin, 'soft'));
-  root.style.setProperty('--pill-pin-cl', readColor(pc.pin, 'cat'));
+  const root = document.documentElement;
+  ['sub','rep','debt'].forEach(type => {
+    const key = pc[type] || 'blue';
+    root.style.setProperty('--pill-' + type + '-bg', readColor(key, 'soft'));
+    root.style.setProperty('--pill-' + type + '-cl', readColor(key, 'cat'));
+  });
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
@@ -516,6 +525,7 @@ function makeAppHead(greeting, appName) {
   const gradients = ['av-a','av-b','av-c'];
 
   const list = Object.entries(members)
+    .filter(([uid]) => !(App.settings?.bannedUids || []).includes(uid))
     .map(([uid, info]) => ({ uid, ...info, isMe: uid === currentUid }))
     .sort((a, b) => (a.isMe === b.isMe ? 0 : (a.isMe ? 1 : -1)));
 
@@ -578,7 +588,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ---------- HOME ---------- */
+/* ---------- HOME (same as before but fixes tag rendering — relies on tagUids) ---------- */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -794,11 +804,10 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* ---------- BUY ---------- */
+/* ---------- BUY (Fix #1: list color + edit + delete) ---------- */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
-  const lists = s.buyLists || [{ id: 'default', name: 'General' }];
-  // Fallback if activeBuyList was deleted
+  const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue' }];
   const validListIds = lists.map(l => l.id);
   if (!validListIds.includes(App.activeBuyList)) App.activeBuyList = validListIds[0];
 
@@ -818,7 +827,10 @@ ScreenRenderers.buy = function () {
   lists.forEach(l => {
     const chip = document.createElement('div');
     chip.className = 'list-chip' + (l.id === currentListId ? ' active' : '');
-    chip.textContent = l.name;
+    const dot = document.createElement('span');
+    dot.className = 'list-color c-' + (l.colorKey || 'blue');
+    chip.appendChild(dot);
+    chip.appendChild(document.createTextNode(l.name));
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
     chip.oncontextmenu = (e) => { e.preventDefault(); openListMenu(l); };
     let t = null;
@@ -902,6 +914,17 @@ function openNewListEditor() {
     f.className = 'field';
     f.innerHTML = '<label>List Name</label><input id="nl-name" placeholder="e.g. Hardware">';
     body.appendChild(f);
+    const c = document.createElement('div');
+    c.className = 'field';
+    c.innerHTML = '<label>Color</label><div class="swatch c-blue" id="nl-swatch"></div>';
+    body.appendChild(c);
+    let chosenColor = 'blue';
+    c.onclick = () => {
+      openColorPicker(chosenColor, (key) => {
+        chosenColor = key;
+        document.getElementById('nl-swatch').className = 'swatch c-' + key;
+      });
+    };
     footer.innerHTML = '';
     const btn = document.createElement('button');
     btn.className = 'primary';
@@ -909,13 +932,12 @@ function openNewListEditor() {
     btn.onclick = async () => {
       const name = document.getElementById('nl-name').value.trim();
       if (!name) return;
-      const lists = App.settings.buyLists || [{ id: 'default', name: 'General' }];
-      const newList = { id: 'list_' + Date.now(), name };
+      const lists = (App.settings.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue' }]).slice();
+      const newList = { id: 'list_' + Date.now(), name, colorKey: chosenColor };
       lists.push(newList);
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       App.activeBuyList = newList.id;
       closeSheet();
-      // Re-render with the new list active
       if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
@@ -924,17 +946,37 @@ function openNewListEditor() {
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
-    const rename = document.createElement('button');
-    rename.className = 'primary';
-    rename.textContent = 'Rename List';
-    rename.onclick = async () => {
-      const n = prompt('New name:', l.name);
-      if (!n) return;
-      const lists = App.settings.buyLists.map(x => x.id === l.id ? { ...x, name: n } : x);
+    // Rename
+    const nameF = document.createElement('div');
+    nameF.className = 'field';
+    nameF.innerHTML = '<label>Name</label><input id="lm-name" value="' + esc(l.name) + '">';
+    body.appendChild(nameF);
+    // Color
+    let chosenColor = l.colorKey || 'blue';
+    const colorF = document.createElement('div');
+    colorF.className = 'field';
+    colorF.innerHTML = '<label>Color</label><div class="swatch c-' + chosenColor + '" id="lm-swatch"></div>';
+    body.appendChild(colorF);
+    colorF.onclick = () => {
+      openColorPicker(chosenColor, (key) => {
+        chosenColor = key;
+        document.getElementById('lm-swatch').className = 'swatch c-' + key;
+      });
+    };
+
+    footer.innerHTML = '';
+    const save = document.createElement('button');
+    save.className = 'primary';
+    save.textContent = 'Save';
+    save.onclick = async () => {
+      const newName = document.getElementById('lm-name').value.trim();
+      if (!newName) return;
+      const lists = App.settings.buyLists.map(x => x.id === l.id ? { ...x, name: newName, colorKey: chosenColor } : x);
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       closeSheet();
     };
-    footer.appendChild(rename);
+    footer.appendChild(save);
+
     if (l.id !== 'default') {
       const del = document.createElement('button');
       del.className = 'danger';
@@ -959,7 +1001,7 @@ function toggleBuy(item) {
   });
 }
 
-/* ---------- TO PAY ---------- */
+/* ---------- TO PAY (Fix #5: per-person tag with uid) ---------- */
 ScreenRenderers.topay = function () {
   const items = App.toPay.slice();
   const sortKey = (x) => { if (x.paid) return 3; if (x.dueDate) return 1; return 2; };
@@ -1012,17 +1054,18 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
       
+      // Fix #5: render avatars based on stored uids
       let tagHtml = '';
-      const members = Object.keys(App.settings?.members || {});
-      if (members.length > 0) {
-        const otherUid = members.find(uid => uid !== App.user.uid);
-        if (item.tag === 'me') {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(App.user.uid)}</div>`;
-        } else if (item.tag === 'partner' && otherUid) {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}</div>`;
-        } else if (item.tag === 'joint') {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(App.user.uid)}</div>`;
-        }
+      const tagUids = item.tagUids || [];
+      if (tagUids.length > 0) {
+        const meUid = App.user.uid;
+        const sortedUids = tagUids.slice().sort((a, b) => {
+          if (a === meUid) return 1;
+          if (b === meUid) return -1;
+          return 0;
+        });
+        const avatars = sortedUids.map(u => getAvatarHtml(u)).join('');
+        tagHtml = `<div class="tag-avs">${avatars}</div>`;
       }
 
       const r = document.createElement('div');
@@ -1048,7 +1091,7 @@ function togglePaid(item) {
   });
 }
 
-/* ---------- HISTORY ---------- */
+/* ---------- HISTORY (Fix #4: delete button moved, double confirm) ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1108,8 +1151,20 @@ ScreenRenderers.history = function () {
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
-        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
-        '<button class="delete-btn" onclick="event.stopPropagation();deleteHistory(\'' + r.id + '\',\'' + r.periodLabel.replace(/'/g, '') + '\')">×</button>';
+        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
+      
+      // Fix #4: delete button positioned top-right, double confirm
+      const delBtn = document.createElement('button');
+      delBtn.className = 'delete-btn';
+      delBtn.textContent = '×';
+      delBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete the record for "' + r.periodLabel + '"?\n\nThis cannot be undone.')) return;
+        if (!confirm('Are you absolutely sure?\n\nThis will permanently remove the history entry for this month.')) return;
+        FB.deleteDoc(FB.doc(historyCol(), r.id)).then(() => toast('History entry deleted'));
+      };
+      card.appendChild(delBtn);
+
       wrap.appendChild(card);
     });
   }
@@ -1123,12 +1178,6 @@ ScreenRenderers.history = function () {
       next.onclick = () => { App.historyYear = String(Number(App.historyYear) + 1); renderScreen('history'); };
   }, 0);
   return wrap;
-};
-
-window.deleteHistory = async function(id, label) {
-  if (!confirm('Delete the record for "' + label + '"? This cannot be undone.')) return;
-  await FB.deleteDoc(FB.doc(historyCol(), id));
-  toast('History entry deleted');
 };
 
 function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
@@ -1149,7 +1198,7 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
   return share + myToPay - myReturn;
 }
 
-/* ---------- SAVED ---------- */
+/* ---------- SAVED (Fix #6: goal accent + tag rendering) ---------- */
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -1187,23 +1236,22 @@ ScreenRenderers.saved = function () {
     empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
     wrap.appendChild(empty);
   } else {
-    const members = Object.keys(App.settings?.members || {});
-    const myUid = App.user?.uid;
     App.goals.forEach(g => {
       const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
-      const colorVar = 'var(--cat-' + (g.colorKey || 'green') + ')';
       const el = document.createElement('div');
       el.className = 'goal-card';
-      el.style.setProperty('--accent', colorVar);
+      el.style.setProperty('--accent', 'var(--cat-' + (g.colorKey || 'green') + ')');
 
       let tagHtml = '';
-      if (g.tag === 'me') tagHtml = `<span class="tag-avs">${getAvatarHtml(myUid)}</span>`;
-      else if (g.tag === 'partner') {
-        const otherUid = members.find(u => u !== myUid);
-        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}</span>`;
-      } else if (g.tag === 'joint') {
-        const otherUid = members.find(u => u !== myUid);
-        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(myUid)}</span>`;
+      const tagUids = g.tagUids || [];
+      if (tagUids.length > 0) {
+        const meUid = App.user.uid;
+        const sortedUids = tagUids.slice().sort((a, b) => {
+          if (a === meUid) return 1;
+          if (b === meUid) return -1;
+          return 0;
+        });
+        tagHtml = `<span class="tag-avs">${sortedUids.map(u => getAvatarHtml(u, '24px')).join('')}</span>`;
       }
 
       el.innerHTML =
@@ -1214,7 +1262,7 @@ ScreenRenderers.saved = function () {
         '<div class="goal-nums"><span><b>' + fmtAmount(g.current) + '</b> / ' + fmtAmount(g.target) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
         '<div class="goal-foot">' +
-          '<span class="auto-pill">Auto: ' + fmtAmount(g.autoAmount) + ' / mo</span>' +
+          '<span class="auto-pill">Auto: ' + fmtAmount(g.autoAmount || 0) + ' / mo</span>' +
           '<span>' + fmtAmount(Math.max(0, g.target - g.current)) + ' to go</span>' +
         '</div>';
       el.onclick = () => openGoalSheet(g);
@@ -1255,12 +1303,14 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-/* ---------- SETTINGS ---------- */
+/* ---------- SETTINGS (Fix #6, #7, #8, #9) ---------- */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const members = s.members || {};
   const myMember = (App.user && members[App.user.uid]) || {};
+  const mySalary = Number(us.salary) || 0;
+  const salaryOk = mySalary > 0;
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Tune things,', 'Settings'));
@@ -1287,50 +1337,56 @@ ScreenRenderers.settings = function () {
   const mg = group();
   mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
 
-  // Budget contribution method + value
-  const budgetMethodRow = document.createElement('div');
-  budgetMethodRow.className = 'row';
-  budgetMethodRow.innerHTML = '<span class="lbl">My Budget Contribution</span>' +
-    '<div class="segmented" id="budget-method-seg">' +
-      '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-      '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
+  // Fix #7: Budget Contribution stacked layout
+  const budgetStack = document.createElement('div');
+  budgetStack.className = 'stack-row';
+  if (!salaryOk) budgetStack.style.opacity = '.55';
+  budgetStack.innerHTML = '<span class="lbl">My Budget Contribution' +
+    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') +
+    '</span>';
+  const budgetSegWrap = document.createElement('div');
+  budgetSegWrap.className = 'segmented-wrap';
+  budgetSegWrap.innerHTML = '<div class="segmented" id="budget-method-seg"' +
+    (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
+    '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+    '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
     '</div>';
-  mg.appendChild(budgetMethodRow);
-  setTimeout(() => {
-    budgetMethodRow.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        const m = b.dataset.method;
-        updateUserSetting('budgetMethod', m);
-        renderScreen('settings');
-      };
-    });
-  }, 0);
-  mg.appendChild(rowInput(us.budgetMethod === 'pct' ? 'Budget %' : 'Budget Amount', 'set-budget-fixed',
-    us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)));
+  budgetStack.appendChild(budgetSegWrap);
+  const budgetInputLine = document.createElement('div');
+  budgetInputLine.className = 'input-line';
+  budgetInputLine.innerHTML = '<input id="set-budget-fixed" ' +
+    (!salaryOk ? 'placeholder="Disabled" disabled' : '') +
+    ' value="' + (us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)) + '"><span class="unit">' +
+    (us.budgetMethod === 'pct' ? '%' : App.settings?.currency || 'SEK') + '</span>';
+  budgetStack.appendChild(budgetInputLine);
+  mg.appendChild(budgetStack);
 
-  // To Pay contribution method + value
-  const toPayMethodRow = document.createElement('div');
-  toPayMethodRow.className = 'row';
-  toPayMethodRow.innerHTML = '<span class="lbl">My To Pay Share</span>' +
-    '<div class="segmented" id="topay-method-seg">' +
-      '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-      '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
+  // To Pay Share stacked layout
+  const toPayStack = document.createElement('div');
+  toPayStack.className = 'stack-row';
+  if (!salaryOk) toPayStack.style.opacity = '.55';
+  toPayStack.innerHTML = '<span class="lbl">My To Pay Share' +
+    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') +
+    '</span>';
+  const toPaySegWrap = document.createElement('div');
+  toPaySegWrap.className = 'segmented-wrap';
+  toPaySegWrap.innerHTML = '<div class="segmented" id="topay-method-seg"' +
+    (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
+    '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+    '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
     '</div>';
-  mg.appendChild(toPayMethodRow);
-  setTimeout(() => {
-    toPayMethodRow.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        const m = b.dataset.method;
-        updateUserSetting('toPayMethod', m);
-        renderScreen('settings');
-      };
-    });
-  }, 0);
-  mg.appendChild(rowInput(us.toPayMethod === 'pct' ? 'To Pay %' : 'To Pay Amount', 'set-topay-fixed',
-    us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)));
+  toPayStack.appendChild(toPaySegWrap);
+  const toPayInputLine = document.createElement('div');
+  toPayInputLine.className = 'input-line';
+  toPayInputLine.innerHTML = '<input id="set-topay-fixed" ' +
+    (!salaryOk ? 'placeholder="Disabled" disabled' : '') +
+    ' value="' + (us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)) + '"><span class="unit">' +
+    (us.toPayMethod === 'pct' ? '%' : App.settings?.currency || 'SEK') + '</span>';
+  toPayStack.appendChild(toPayInputLine);
+  mg.appendChild(toPayStack);
 
   mg.appendChild(rowToggle('Track savings', us.trackSavings, (el) => {
-    if (!us.salary) { toast('Enter a salary first'); el.classList.remove('on'); return; }
+    if (!salaryOk) { toast('Enter salary first'); el.classList.remove('on'); return; }
     updateUserSetting('trackSavings', el.classList.contains('on'));
   }));
   wrap.appendChild(mg);
@@ -1361,8 +1417,9 @@ ScreenRenderers.settings = function () {
   toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
   appear.appendChild(toneRow);
 
-  ['sub','rep','debt','pin'].forEach(type => {
-    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill', pin: 'Pin Pill' }[type];
+  // Fix #8: removed pin pill row. Only sub/rep/debt remain.
+  ['sub','rep','debt'].forEach(type => {
+    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill' }[type];
     const row = document.createElement('div');
     row.className = 'row';
     const pc = s.pillColors || {};
@@ -1391,6 +1448,35 @@ ScreenRenderers.settings = function () {
   runRow.onclick = () => confirmRunReset();
   reset.appendChild(runRow);
   wrap.appendChild(reset);
+
+  // Fix #9: Members & Ban management
+  wrap.appendChild(sectionTitle('Members & Safety'));
+  const memberGroup = group();
+  const bannedUids = s.bannedUids || [];
+  const ownerUids = s.owners || [];
+  Object.entries(members).forEach(([uid, m]) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const isOwner = ownerUids.includes(uid);
+    const isBanned = bannedUids.includes(uid);
+    const isMe = uid === App.user.uid;
+    row.innerHTML = '<span class="lbl">' + esc(m.name || m.email || uid) + (isOwner ? ' · Owner' : '') + (isMe ? ' (you)' : '') + '</span>' +
+      (isBanned ? '<span class="val" style="color:var(--red);">Banned</span>' :
+        isOwner ? '<span class="val">Protected</span>' :
+        '<span class="val" style="color:var(--red);font-weight:600;">Ban ›</span>');
+    if (!isOwner && !isBanned && !isMe) {
+      row.onclick = () => confirmBanMember(uid, m);
+    }
+    memberGroup.appendChild(row);
+  });
+  if (bannedUids.length > 0) {
+    const clearRow = document.createElement('div');
+    clearRow.className = 'row';
+    clearRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Clear Banned List (' + bannedUids.length + ')</span>';
+    clearRow.onclick = () => confirmClearBanned();
+    memberGroup.appendChild(clearRow);
+  }
+  wrap.appendChild(memberGroup);
 
   wrap.appendChild(sectionTitle('Account'));
   const acct = group();
@@ -1431,12 +1517,31 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
   setTimeout(() => {
+    // Wire the segmented controls
+    const budgetSeg = document.getElementById('budget-method-seg');
+    if (budgetSeg) budgetSeg.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        if (!salaryOk) { toast('Enter salary first'); return; }
+        updateUserSetting('budgetMethod', b.dataset.method);
+        renderScreen('settings');
+      };
+    });
+    const toPaySeg = document.getElementById('topay-method-seg');
+    if (toPaySeg) toPaySeg.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        if (!salaryOk) { toast('Enter salary first'); return; }
+        updateUserSetting('toPayMethod', b.dataset.method);
+        renderScreen('settings');
+      };
+    });
     bindInput('set-salary', v => updateUserSetting('salary', Number(v) || 0));
     bindInput('set-budget-fixed', v => {
+      if (!salaryOk) { toast('Enter salary first'); return; }
       if (us.budgetMethod === 'pct') updateUserSetting('budgetPct', Number(v) || 0);
       else updateUserSetting('budgetFixed', Number(v) || 0);
     });
     bindInput('set-topay-fixed', v => {
+      if (!salaryOk) { toast('Enter salary first'); return; }
       if (us.toPayMethod === 'pct') updateUserSetting('toPayPct', Number(v) || 0);
       else updateUserSetting('toPayFixed', Number(v) || 0);
     });
@@ -1495,82 +1600,24 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- SAFETY / DATA ---------- */
-function exportData() {
-  const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.json`;
-  a.click();
-  toast('Backup downloaded');
+/* ---------- BAN / CLEAR BANNED (Fix #9) ---------- */
+function confirmBanMember(uid, m) {
+  const name = m.name || m.email || uid;
+  if (!confirm('Ban "' + name + '"?\n\nThey will be signed out on their next app load and blocked from returning.')) return;
+  const s = App.settings || DEFAULT_SETTINGS;
+  const ownerUids = s.owners || [];
+  if (ownerUids.includes(uid)) { toast('Cannot ban an owner'); return; }
+  const bannedUids = (s.bannedUids || []).slice();
+  if (!bannedUids.includes(uid)) bannedUids.push(uid);
+  FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been banned'));
 }
-
-function importData() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.json';
-  input.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        if (!confirm('This will OVERWRITE your current data. Are you sure?')) return;
-        
-        for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
-        for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
-        for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
-        for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
-        for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
-        for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
-
-        await FB.setDoc(budgetDoc(), data.settings);
-        for (const c of data.categories) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
-        for (const c of data.expenses) await FB.setDoc(FB.doc(expensesCol(), c.id), c);
-        for (const c of data.toPay) await FB.setDoc(FB.doc(toPayCol(), c.id), c);
-        for (const c of data.buy) await FB.setDoc(FB.doc(buyCol(), c.id), c);
-        for (const c of data.goals) await FB.setDoc(FB.doc(goalsCol(), c.id), c);
-        for (const c of data.history) await FB.setDoc(FB.doc(historyCol(), c.id), c);
-
-        toast('Data restored successfully');
-        setTimeout(() => window.location.reload(), 1500);
-      } catch (err) { toast('Import failed: Invalid file'); }
-    };
-    reader.readAsText(file);
-  };
-  input.click();
-}
-
-async function changeEmail() {
-  const newEmail = prompt('Enter new email address:');
-  if (!newEmail) return;
-  const password = prompt('Enter current password to confirm:');
-  if (!password) return;
-  try {
-    const cred = FB.EmailAuthProvider.credential(App.user.email, password);
-    await FB.reauthenticateWithCredential(App.user, cred);
-    await FB.updateEmail(App.user, newEmail);
-    toast('Email updated to ' + newEmail);
-  } catch (err) { toast('Failed: ' + err.message); }
-}
-
-async function confirmHardReset() {
-  if (!confirm("⚠️ ARE YOU SURE?\n\nThis will permanently delete ALL data for EVERYONE. This cannot be undone.")) return;
-  const pw = prompt("Type 'RESET' to confirm:");
-  if (pw !== 'RESET') { toast('Reset cancelled'); return; }
-  try {
-    for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
-    for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
-    for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
-    for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
-    for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
-    for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
-    await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
-    toast('App has been hard reset');
-    setTimeout(() => window.location.reload(), 1500);
-  } catch (e) { toast('Reset failed: ' + e.message); }
+function confirmClearBanned() {
+  const s = App.settings || DEFAULT_SETTINGS;
+  const bannedUids = s.bannedUids || [];
+  if (bannedUids.length === 0) return;
+  if (!confirm('Clear the banned list?\n\n' + bannedUids.length + ' user(s) will be able to sign in again.')) return;
+  if (!confirm('Are you sure? They will regain access to the shared budget.')) return;
+  FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
 /* ---------- PROFILE ---------- */
@@ -1670,9 +1717,9 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- GOALS (V4 + accent + tag) ---------- */
+/* ---------- GOAL EDITOR (Fix #2, #6: layout 3 + per-person monthly) ---------- */
 function openGoalEditor() {
-  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tag: 'joint' };
+  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tagUids: [] };
   showGoalSheet(g, true);
 }
 function openGoalSheet(g) {
@@ -1721,43 +1768,112 @@ function showGoalSheet(g, isNew) {
     const dInp = dateRow.querySelector('#g-date');
     dInp.addEventListener('input', () => autoSlashDate(dInp));
 
-    // Accent color
+    // Accent color — Fix #6: applies on click
     const colorRow = document.createElement('div');
     colorRow.className = 'v4-row';
-    colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
+    colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" id="g-swatch" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
     colorRow.onclick = () => {
       openColorPicker(g.colorKey || 'green', (newKey) => {
         g.colorKey = newKey;
-        const sw = colorRow.querySelector('.swatch');
-        sw.className = 'swatch c-' + newKey;
+        const sw = document.getElementById('g-swatch');
+        if (sw) {
+          sw.className = 'swatch c-' + newKey;
+          sw.style.background = ''; // reset inline so class takes over
+        }
         if (!isNew) FB.updateDoc(FB.doc(goalsCol(), g.id), { colorKey: newKey });
       });
     };
     body.appendChild(colorRow);
 
-    // Tag (Me / Partner / Joint)
-    const tagRow = document.createElement('div');
-    tagRow.className = 'v4-row';
-    tagRow.style.flexDirection = 'column';
-    tagRow.style.alignItems = 'flex-start';
-    tagRow.innerHTML = '<label style="margin-bottom:8px;">Who is this goal for?</label>';
-    const tagSeg = document.createElement('div');
-    tagSeg.className = 'segmented';
-    tagSeg.style.width = '100%';
-    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
+    // Who is this for? (multi-select)
+    let currentTagUids = Array.isArray(g.tagUids) ? g.tagUids.slice() : [];
+    const members = Object.keys(App.settings?.members || {});
+    const memberList = members.map(uid => ({
+      uid,
+      name: (App.settings.members[uid].name || App.settings.members[uid].email || uid),
+      isMe: uid === App.user.uid,
+    }));
+
+    // Per-person monthly split
+    let perPerson = {};
+    memberList.forEach(m => { perPerson[m.uid] = 0; });
+    if (g.monthlySplit) Object.assign(perPerson, g.monthlySplit);
+
+    function renderSplits() {
+      const container = document.getElementById('g-splits-container');
+      if (!container) return;
+      container.innerHTML = '';
+      
+      // Total row
+      const activeMembers = memberList.filter(m => currentTagUids.includes(m.uid));
+      if (activeMembers.length === 0) return;
+      
+      const list = document.createElement('div');
+      list.className = 'gsplits';
+      
+      let total = 0;
+      activeMembers.forEach(m => {
+        const amt = Number(perPerson[m.uid]) || 0;
+        total += amt;
+        const row = document.createElement('div');
+        row.className = 'gsplit-row';
+        row.innerHTML = getAvatarHtml(m.uid, '28px') +
+          '<div class="label">' + esc(m.isMe ? 'You' : m.name) + '</div>' +
+          '<div class="chip"><input type="number" data-uid="' + m.uid + '" value="' + amt + '"><span class="u">/ mo</span></div>';
+        list.appendChild(row);
+      });
+      
+      const foot = document.createElement('div');
+      foot.className = 'gsplit-foot';
+      foot.innerHTML = '<span>Total monthly</span><span>' + fmtAmount(total) + ' ' + esc(App.settings?.currency || 'SEK') + '</span>';
+      list.appendChild(foot);
+      
+      container.appendChild(list);
+      
+      // Wire inputs
+      list.querySelectorAll('input[data-uid]').forEach(inp => {
+        inp.addEventListener('input', () => {
+          perPerson[inp.dataset.uid] = Number(inp.value) || 0;
+          renderSplits();
+        });
+      });
+    }
+
+    const whoRow = document.createElement('div');
+    whoRow.className = 'v4-row';
+    whoRow.style.flexDirection = 'column';
+    whoRow.style.alignItems = 'flex-start';
+    whoRow.innerHTML = '<label style="margin-bottom:8px;">Who is this goal for?</label>';
+    const whoSeg = document.createElement('div');
+    whoSeg.className = 'segmented';
+    whoSeg.style.width = '100%';
+    whoSeg.style.flexWrap = 'wrap';
+    whoSeg.style.gap = '2px';
+    
+    memberList.forEach(m => {
       const b = document.createElement('button');
-      b.textContent = label;
+      b.textContent = m.isMe ? 'Me' : m.name;
       b.style.flex = '1';
-      if ((g.tag || 'joint') === val) b.className = 'active';
+      if (currentTagUids.includes(m.uid)) b.className = 'active';
       b.onclick = () => {
-        g.tag = val;
-        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
+        if (currentTagUids.includes(m.uid)) {
+          currentTagUids = currentTagUids.filter(u => u !== m.uid);
+          b.classList.remove('active');
+        } else {
+          currentTagUids.push(m.uid);
+          b.classList.add('active');
+        }
+        renderSplits();
       };
-      tagSeg.appendChild(b);
+      whoSeg.appendChild(b);
     });
-    tagRow.appendChild(tagSeg);
-    body.appendChild(tagRow);
+    whoRow.appendChild(whoSeg);
+    body.appendChild(whoRow);
+
+    const splitsContainer = document.createElement('div');
+    splitsContainer.id = 'g-splits-container';
+    body.appendChild(splitsContainer);
+    renderSplits();
 
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'v4-actions';
@@ -1770,18 +1886,29 @@ function showGoalSheet(g, isNew) {
       const target = Number(amtInput.value);
       const targetDate = ddmmyyyyToISO(dInp.value) || '';
       if (!name || !target) { toast('Name and Amount required'); return; }
+      if (currentTagUids.length === 0) { toast('Pick at least one person'); return; }
+      
+      const monthlySplit = {};
+      const autoTotal = currentTagUids.reduce((acc, uid) => acc + (Number(perPerson[uid]) || 0), 0);
+      currentTagUids.forEach(uid => { monthlySplit[uid] = Number(perPerson[uid]) || 0; });
       
       closeSheet();
       if (isNew) {
         await FB.addDoc(goalsCol(), {
           name, icon: g.icon, target, current: 0,
-          autoAmount: Number(g.autoAmount) || 0,
-          targetDate, colorKey: g.colorKey, tag: g.tag || 'joint',
+          autoAmount: autoTotal,
+          monthlySplit,
+          tagUids: currentTagUids,
+          targetDate, colorKey: g.colorKey,
           createdAt: new Date().toISOString()
         });
       } else {
         await FB.updateDoc(FB.doc(goalsCol(), g.id), {
-          name, icon: g.icon, target, targetDate, colorKey: g.colorKey, tag: g.tag || 'joint'
+          name, icon: g.icon, target, targetDate,
+          colorKey: g.colorKey,
+          tagUids: currentTagUids,
+          autoAmount: autoTotal,
+          monthlySplit,
         });
       }
     };
@@ -2166,7 +2293,7 @@ function openExpenseEditor(expense, prefillName) {
       closeSheet();
       if (isNew) {
         const periodKey = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay).key;
-        await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey });
+        await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey, createdBy: App.user.uid });
         await syncCurrentHistoryBudget();
       } else {
         await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat });
@@ -2188,12 +2315,24 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ---------- TO PAY EDITOR ---------- */
+/* ---------- TO PAY EDITOR (Fix #5: tagUids + joint per-person amounts) ---------- */
 function openToPayEditor(item) {
   const isNew = !item;
-  if (!item) item = { name: '', amount: null, dueDate: '', paid: false, paidDate: null, isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '', tag: 'joint' };
+  if (!item) item = {
+    name: '', amount: null, dueDate: '', paid: false, paidDate: null,
+    isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '',
+    tagUids: [], amountsByUid: {}
+  };
   let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : item.isDebt ? 'debt' : 'none';
-  let localTag = item.tag || 'joint';
+  let currentTagUids = Array.isArray(item.tagUids) ? item.tagUids.slice() : [];
+  const amountsByUid = { ...(item.amountsByUid || {}) };
+
+  const members = Object.keys(App.settings?.members || {});
+  const memberList = members.map(uid => ({
+    uid,
+    name: (App.settings.members[uid].name || App.settings.members[uid].email || uid),
+    isMe: uid === App.user.uid,
+  }));
 
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + (isNew ? 'New payment' : 'Edit payment') + '</h3>';
@@ -2242,28 +2381,81 @@ function openToPayEditor(item) {
     body.appendChild(repeatEndF);
     repeatEndF.querySelector('#tp-repeat-end').addEventListener('input', (e) => autoSlashDate(e.target));
 
-    const tagF = document.createElement('div');
-    tagF.className = 'field';
-    tagF.style.flexDirection = 'column';
-    tagF.style.alignItems = 'flex-start';
-    tagF.innerHTML = '<label style="margin-bottom:8px;">Who pays?</label>';
-    const tagSeg = document.createElement('div');
-    tagSeg.className = 'segmented';
-    tagSeg.style.width = '100%';
-    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
+    // Who pays — multi-select
+    const whoRow = document.createElement('div');
+    whoRow.className = 'field';
+    whoRow.style.flexDirection = 'column';
+    whoRow.style.alignItems = 'flex-start';
+    whoRow.innerHTML = '<label style="margin-bottom:8px;">Who pays?</label>';
+    const whoSeg = document.createElement('div');
+    whoSeg.className = 'segmented';
+    whoSeg.style.width = '100%';
+    whoSeg.style.flexWrap = 'wrap';
+    whoSeg.style.gap = '2px';
+    
+    memberList.forEach(m => {
       const b = document.createElement('button');
-      b.textContent = label;
+      b.textContent = m.isMe ? 'Me' : m.name;
       b.style.flex = '1';
-      if (localTag === val) b.className = 'active';
+      if (currentTagUids.includes(m.uid)) b.className = 'active';
       b.onclick = () => {
-        localTag = val;
-        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
+        if (currentTagUids.includes(m.uid)) {
+          currentTagUids = currentTagUids.filter(u => u !== m.uid);
+          b.classList.remove('active');
+        } else {
+          currentTagUids.push(m.uid);
+          b.classList.add('active');
+        }
+        renderAmounts();
       };
-      tagSeg.appendChild(b);
+      whoSeg.appendChild(b);
     });
-    tagF.appendChild(tagSeg);
-    body.appendChild(tagF);
+    whoRow.appendChild(whoSeg);
+    body.appendChild(whoRow);
+
+    // Amounts per person (only if more than one person tagged)
+    const amountsContainer = document.createElement('div');
+    amountsContainer.id = 'tp-amounts-container';
+    body.appendChild(amountsContainer);
+
+    function renderAmounts() {
+      amountsContainer.innerHTML = '';
+      if (currentTagUids.length <= 1) return;
+      
+      const activeMembers = memberList.filter(m => currentTagUids.includes(m.uid));
+      const list = document.createElement('div');
+      list.className = 'gsplits';
+      
+      let total = 0;
+      activeMembers.forEach(m => {
+        const amt = Number(amountsByUid[m.uid]) || 0;
+        total += amt;
+        const row = document.createElement('div');
+        row.className = 'gsplit-row';
+        row.innerHTML = getAvatarHtml(m.uid, '28px') +
+          '<div class="label">' + esc(m.isMe ? 'You' : m.name) + '</div>' +
+          '<div class="chip"><input type="number" data-uid="' + m.uid + '" value="' + amt + '"><span class="u">' + esc(App.settings?.currency || 'SEK') + '</span></div>';
+        list.appendChild(row);
+      });
+      
+      const totalAmount = Number(document.getElementById('tp-amt')?.value) || 0;
+      const foot = document.createElement('div');
+      foot.className = 'gsplit-foot';
+      const match = Math.abs(total - totalAmount) < 0.01;
+      foot.style.color = match ? '' : 'var(--red)';
+      foot.innerHTML = '<span>Split total</span><span>' + fmtAmount(total) + (match ? '' : ' (≠ ' + fmtAmount(totalAmount) + ')') + '</span>';
+      list.appendChild(foot);
+      
+      amountsContainer.appendChild(list);
+      
+      list.querySelectorAll('input[data-uid]').forEach(inp => {
+        inp.addEventListener('input', () => {
+          amountsByUid[inp.dataset.uid] = Number(inp.value) || 0;
+          renderAmounts();
+        });
+      });
+    }
+    renderAmounts();
 
     footer.innerHTML = '';
     const save = document.createElement('button');
@@ -2279,6 +2471,19 @@ function openToPayEditor(item) {
       const dueISO = dueStr ? ddmmyyyyToISO(dueStr) : '';
       if ((type === 'subscription' || type === 'repeat' || type === 'debt') && !dueISO) { toast('Recurring items need a valid due date'); return; }
       if (dueStr && !dueISO) { toast('Invalid date — use DD/MM/YYYY'); return; }
+      if (currentTagUids.length === 0) { toast('Pick at least one person'); return; }
+      
+      // If multiple people are tagged, validate the split amounts match the total
+      if (currentTagUids.length > 1 && amount != null) {
+        const splitTotal = currentTagUids.reduce((a, uid) => a + (Number(amountsByUid[uid]) || 0), 0);
+        if (Math.abs(splitTotal - amount) > 0.01) {
+          toast('Split total (' + fmtAmount(splitTotal) + ') does not match total amount (' + fmtAmount(amount) + ')');
+          return;
+        }
+      } else {
+        // Single person → give them the full amount
+        currentTagUids.forEach(uid => { amountsByUid[uid] = amount || 0; });
+      }
       
       let repeatUntilISO = '';
       if (type === 'repeat' || type === 'debt') {
@@ -2287,7 +2492,15 @@ function openToPayEditor(item) {
         if (!repeatUntilISO) { toast('Repeat needs a valid end date'); return; }
       }
 
-      const data = { name, amount, dueDate: dueISO, isSubscription: type === 'subscription', isRepeat: type === 'repeat', isDebt: type === 'debt', repeatUntil: repeatUntilISO || '', tag: localTag };
+      const data = {
+        name, amount, dueDate: dueISO,
+        isSubscription: type === 'subscription',
+        isRepeat: type === 'repeat',
+        isDebt: type === 'debt',
+        repeatUntil: repeatUntilISO || '',
+        tagUids: currentTagUids,
+        amountsByUid: { ...amountsByUid },
+      };
       closeSheet();
       if (isNew) await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
@@ -2341,11 +2554,7 @@ function computeCurrentPeriod(startDay) {
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
   let sYear = y, sMonth = m;
-  if (d < startDay) {
-    const prev = new Date(y, m - 1, 1);
-    sYear = prev.getFullYear();
-    sMonth = prev.getMonth();
-  }
+  if (d < startDay) { const prev = new Date(y, m - 1, 1); sYear = prev.getFullYear(); sMonth = prev.getMonth(); }
   const startDate = clampDay(sYear, sMonth, startDay);
   const nextStart = clampDay(sYear, sMonth + 1, startDay);
   const endDate = new Date(nextStart); endDate.setDate(endDate.getDate() - 1);
