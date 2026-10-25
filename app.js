@@ -15,8 +15,8 @@ const DEFAULT_SETTINGS = {
   appName: 'Our Budget', currency: 'SEK', totalBudget: 12000,
   periodStartDay: 25, toPayResetDay: 'last',
   timezone: 'Europe/Stockholm',
-  members: {}, owners: [], bannedUids: [], lastResetKey: null,
-  pillColors: { sub: 'blue', rep: 'purple', debt: 'red' },
+  members: {}, lastResetKey: null, owners: [], bannedUids: [],
+  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' },
   buyLists: [{ id: 'default', name: 'General', colorKey: 'blue' }]
 };
 
@@ -178,24 +178,25 @@ async function startApp() {
       App.settings = { ...DEFAULT_SETTINGS, owners: [App.user.uid] };
     } else {
       App.settings = snap.data();
-      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
-        toast('You have been removed from this household.');
-        await FB.signOut(FB.auth);
-        return;
-      }
+      // One-time field migrations
       const updates = {};
       if (!App.settings.buyLists) updates.buyLists = DEFAULT_SETTINGS.buyLists;
       if (!App.settings.owners) updates.owners = [App.user.uid];
       if (!App.settings.bannedUids) updates.bannedUids = [];
       if (!App.settings.pillColors) updates.pillColors = DEFAULT_SETTINGS.pillColors;
-      if (App.settings.pillColors && App.settings.pillColors.pin) {
-        const pc = { ...App.settings.pillColors };
-        delete pc.pin;
-        updates.pillColors = pc;
+      // Migrate buyLists missing colorKey
+      if (App.settings.buyLists) {
+        const migrated = App.settings.buyLists.map(l => l.colorKey ? l : { ...l, colorKey: 'blue' });
+        if (JSON.stringify(migrated) !== JSON.stringify(App.settings.buyLists)) updates.buyLists = migrated;
       }
       if (Object.keys(updates).length) {
         await FB.updateDoc(budgetDoc(), updates);
         Object.assign(App.settings, updates);
+      }
+      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed from this household.');
+        await FB.signOut(FB.auth);
+        return;
       }
     }
   } catch (e) { console.error('budget doc:', e); }
@@ -220,7 +221,7 @@ async function startApp() {
   renderTabbar();
   goScreen('home');
   document.getElementById('loading').classList.add('hidden');
-  cleanupOldExpenses();
+  // NOTE: cleanupOldExpenses removed intentionally — it silently deleted past expenses.
 }
 
 async function registerMember() {
@@ -263,16 +264,16 @@ function attachListeners() {
   App.listeners.push(FB.onSnapshot(budgetDoc(), (snap) => {
     if (snap.exists()) {
       App.settings = snap.data();
-      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
-        toast('You have been removed.');
-        FB.signOut(FB.auth);
-        return;
-      }
       if (!App.settings.buyLists) App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
       if (App.user && App.settings.members && App.settings.members[App.user.uid]) {
         App.userSettings = { ...DEFAULT_USER_SETTINGS, ...App.settings.members[App.user.uid] };
       } else {
         App.userSettings = DEFAULT_USER_SETTINGS;
+      }
+      if (App.user && (App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed.');
+        FB.signOut(FB.auth);
+        return;
       }
       applyThemeAndTone();
       applyPillColors();
@@ -332,6 +333,7 @@ function detachListeners() {
   App.listeners = [];
 }
 
+/* ---------- Dates / formatting ---------- */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -466,9 +468,11 @@ function applyThemeAndTone() {
     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.body.setAttribute('data-theme', theme);
 }
+
+/* Pill colors — safe fallback for missing keys */
 function applyPillColors() {
-  if (!App.settings || !App.settings.pillColors) return;
-  const pc = App.settings.pillColors;
+  if (!App.settings) return;
+  const pc = Object.assign({ sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' }, App.settings.pillColors || {});
   const readColor = (key, variant) => {
     const el = document.createElement('div');
     el.className = 'c-' + key;
@@ -481,10 +485,9 @@ function applyPillColors() {
     return val;
   };
   const root = document.documentElement;
-  ['sub','rep','debt'].forEach(type => {
-    const key = pc[type] || 'blue';
-    root.style.setProperty('--pill-' + type + '-bg', readColor(key, 'soft'));
-    root.style.setProperty('--pill-' + type + '-cl', readColor(key, 'cat'));
+  ['sub','rep','debt','pin'].forEach(type => {
+    root.style.setProperty('--pill-' + type + '-bg', readColor(pc[type], 'soft'));
+    root.style.setProperty('--pill-' + type + '-cl', readColor(pc[type], 'cat'));
   });
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -502,7 +505,8 @@ function getAvatarHtml(uid, size = '32px') {
   if (m.avatarBase64) {
     return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};background-image:url(${m.avatarBase64});background-size:cover;background-position:center;"></div>`;
   }
-  return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${parseInt(size)*0.4}px;">${initials}</div>`;
+  const n = parseInt(size, 10) || 32;
+  return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${Math.round(n * 0.42)}px;">${initials}</div>`;
 }
 
 function displayName(uid) {
@@ -589,6 +593,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
+/* ---------- HOME ---------- */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -720,6 +725,7 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
+/* ---------- CATEGORIES ---------- */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -803,6 +809,7 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
+/* ---------- BUY ---------- */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue' }];
@@ -824,11 +831,12 @@ ScreenRenderers.buy = function () {
   selector.className = 'list-selector';
   lists.forEach(l => {
     const chip = document.createElement('div');
+    // Colored buy chip — uses .buy-chip.{colorKey} styles
     const colorKey = l.colorKey || 'blue';
     chip.className = 'buy-chip ' + colorKey + (l.id === currentListId ? ' active' : '');
-    if (l.id === currentListId) {
-      chip.style.outline = '2px solid var(--blue)';
-    }
+    chip.style.outline = l.id === currentListId
+      ? '2px solid ' + getColorVal(colorKey, 'cat')
+      : 'none';
     chip.textContent = l.name;
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
     chip.ondblclick = () => openListMenu(l);
@@ -841,7 +849,7 @@ ScreenRenderers.buy = function () {
     selector.appendChild(chip);
   });
   const addChip = document.createElement('div');
-  addChip.className = 'list-chip';
+  addChip.className = 'buy-chip amber';
   addChip.textContent = '＋';
   addChip.onclick = () => openNewListEditor();
   selector.appendChild(addChip);
@@ -909,6 +917,19 @@ ScreenRenderers.buy = function () {
   return wrap;
 };
 
+/* Read a computed CSS variable from a color class without a hidden probe */
+function getColorVal(colorKey, variant) {
+  const el = document.createElement('div');
+  el.className = 'c-' + colorKey;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  const cs = getComputedStyle(el);
+  const val = variant === 'soft' ? cs.getPropertyValue('--cat-soft').trim()
+                                  : cs.getPropertyValue('--cat').trim();
+  document.body.removeChild(el);
+  return val || '';
+}
+
 function openNewListEditor() {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>New List</h3>';
@@ -916,15 +937,16 @@ function openNewListEditor() {
     f.className = 'field';
     f.innerHTML = '<label>List Name</label><input id="nl-name" placeholder="e.g. Hardware">';
     body.appendChild(f);
-    const c = document.createElement('div');
-    c.className = 'field';
-    c.innerHTML = '<label>Color</label><div class="swatch c-blue" id="nl-swatch"></div>';
-    body.appendChild(c);
     let chosenColor = 'blue';
-    c.onclick = () => {
+    const colorF = document.createElement('div');
+    colorF.className = 'field c-blue';
+    colorF.style.cursor = 'pointer';
+    colorF.innerHTML = '<label>Color</label><div class="color-swatch"></div>';
+    body.appendChild(colorF);
+    colorF.onclick = () => {
       openColorPicker(chosenColor, (key) => {
         chosenColor = key;
-        document.getElementById('nl-swatch').className = 'swatch c-' + key;
+        colorF.className = 'field c-' + key;
       });
     };
     footer.innerHTML = '';
@@ -953,13 +975,14 @@ function openListMenu(l) {
     body.appendChild(nameF);
     let chosenColor = l.colorKey || 'blue';
     const colorF = document.createElement('div');
-    colorF.className = 'field';
-    colorF.innerHTML = '<label>Color</label><div class="swatch c-' + chosenColor + '" id="lm-swatch"></div>';
+    colorF.className = 'field c-' + chosenColor;
+    colorF.style.cursor = 'pointer';
+    colorF.innerHTML = '<label>Color</label><div class="color-swatch"></div>';
     body.appendChild(colorF);
     colorF.onclick = () => {
       openColorPicker(chosenColor, (key) => {
         chosenColor = key;
-        document.getElementById('lm-swatch').className = 'swatch c-' + key;
+        colorF.className = 'field c-' + key;
       });
     };
 
@@ -1000,6 +1023,7 @@ function toggleBuy(item) {
   });
 }
 
+/* ---------- TO PAY ---------- */
 ScreenRenderers.topay = function () {
   const items = App.toPay.slice();
   const sortKey = (x) => { if (x.paid) return 3; if (x.dueDate) return 1; return 2; };
@@ -1051,7 +1075,7 @@ ScreenRenderers.topay = function () {
       const subTag = item.isSubscription ? '<span class="pill-sub">SUB</span>' : '';
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
-      
+
       let tagHtml = '';
       const tagUids = item.tagUids || [];
       if (tagUids.length > 0) {
@@ -1088,6 +1112,7 @@ function togglePaid(item) {
   });
 }
 
+/* ---------- HISTORY ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1129,7 +1154,7 @@ ScreenRenderers.history = function () {
       const spent  = Number(r.totalSpent) || 0;
       const over   = spent > budget;
       const pct    = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
-      
+
       let myShare = 0;
       if (showSaved) myShare = calculateMyShareForPeriod(r.periodKey, budget, us, spent);
       const mySaved = us.salary - myShare;
@@ -1142,20 +1167,19 @@ ScreenRenderers.history = function () {
         '<div class="row2">' +
           '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(budget) + '</div></div>' +
           '<div class="cell"><div class="k">Total Expenses</div><div class="v' + (over ? ' over' : '') + '">' + fmtAmount(spent) + '</div></div>' +
-          (showSaved ? 
+          (showSaved ?
             '<div class="cell"><div class="k">My Share</div><div class="v">' + fmtAmount(myShare) + '</div></div>' +
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
-      
+
       const delBtn = document.createElement('button');
       delBtn.className = 'delete-btn';
       delBtn.textContent = '×';
       delBtn.onclick = (e) => {
         e.stopPropagation();
         if (!confirm('Delete the record for "' + r.periodLabel + '"?\n\nThis cannot be undone.')) return;
-        if (!confirm('Are you absolutely sure?\n\nThis will permanently remove the history entry for this month.')) return;
         FB.deleteDoc(FB.doc(historyCol(), r.id)).then(() => toast('History entry deleted'));
       };
       card.appendChild(delBtn);
@@ -1174,6 +1198,8 @@ ScreenRenderers.history = function () {
   return wrap;
 };
 
+/* Compute how much "my share" was for a period.
+   Divide-by-zero guard: if totalBudget is 0, treat fixed-return as 0. */
 function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
   let share = us.budgetMethod === 'pct'
     ? totalBudget * (Number(us.budgetPct) / 100)
@@ -1186,21 +1212,71 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
     myToPay = Number(us.toPayFixed) || 0;
   }
   const leftover = totalBudget - totalSpent;
-  const myReturn = leftover * (us.budgetMethod === 'pct'
-    ? (Number(us.budgetPct)/100)
-    : (Number(us.budgetFixed)/totalBudget || 0));
+  const returnPct = us.budgetMethod === 'pct'
+    ? (Number(us.budgetPct) / 100)
+    : (totalBudget > 0 ? (Number(us.budgetFixed) || 0) / totalBudget : 0);
+  const myReturn = leftover * returnPct;
   return share + myToPay - myReturn;
 }
 
+/* Compute per-member share for a past period from each member's own settings.
+   Used by Saved screen to show real split — not the placeholder 60/40. */
+function computeMemberSplits(periodRow) {
+  const s = App.settings || DEFAULT_SETTINGS;
+  const members = s.members || {};
+  const totalBudget = Number(periodRow.budgetSnapshot) || 0;
+  const totalSpent  = Number(periodRow.totalSpent) || 0;
+  const leftover = totalBudget - totalSpent;
+
+  const perMember = [];
+  Object.entries(members).forEach(([uid, m]) => {
+    const us = { ...DEFAULT_USER_SETTINGS, ...m };
+    if (!us.salary) return; // skip members without salary set — can't split meaningfully
+    const myShare = calculateMyShareForPeriod(periodRow.periodKey, totalBudget, us, totalSpent);
+    const saved = (Number(us.salary) || 0) - myShare;
+    perMember.push({ uid, saved, share: myShare });
+  });
+
+  // Fallback: if no members have salary set, split by total budget minus spend
+  if (perMember.length === 0) {
+    const fallbackSaved = leftover;
+    const memberList = Object.keys(members);
+    memberList.forEach((uid, i) => {
+      perMember.push({ uid, saved: Math.round(fallbackSaved / memberList.length), share: 0 });
+    });
+  }
+  return perMember;
+}
+
+/* ---------- SAVED ---------- */
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   const lastPeriod = computePreviousPeriod(period);
-  
-  const totalSaved = App.history.reduce((acc, h) => acc + (Number(h.budgetSnapshot) - Number(h.totalSpent)), 0); 
+
+  // Total saved = sum of per-member real savings across all history
+  let totalSaved = 0;
+  let hasTrackedSavings = false;
+  App.history.forEach(h => {
+    const splits = computeMemberSplits(h);
+    if (splits.some(x => x.saved !== 0)) hasTrackedSavings = true;
+    totalSaved += splits.reduce((a, x) => a + x.saved, 0);
+  });
+  // Fallback if no per-member data yet — use budget − spend
+  if (!hasTrackedSavings) {
+    totalSaved = App.history.reduce((acc, h) => acc + (Number(h.budgetSnapshot) - Number(h.totalSpent)), 0);
+  }
+
   const lastMonthRow = App.history.find(h => h.periodKey === lastPeriod.key);
-  let lastMonthSaved = lastMonthRow ? (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent)) : 0;
-  let lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + "-01").getMonth()];
+  let lastMonthSaved = 0;
+  if (lastMonthRow) {
+    const splits = computeMemberSplits(lastMonthRow);
+    lastMonthSaved = splits.reduce((a, x) => a + x.saved, 0);
+    if (!splits.some(x => x.saved !== 0)) {
+      lastMonthSaved = (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent));
+    }
+  }
+  const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + "-01").getMonth()];
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Combined wealth,', 'Saved'));
@@ -1229,6 +1305,7 @@ ScreenRenderers.saved = function () {
     empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
     wrap.appendChild(empty);
   } else {
+    const myUid = App.user?.uid;
     App.goals.forEach(g => {
       const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
       const el = document.createElement('div');
@@ -1238,10 +1315,9 @@ ScreenRenderers.saved = function () {
       let tagHtml = '';
       const tagUids = g.tagUids || [];
       if (tagUids.length > 0) {
-        const meUid = App.user.uid;
         const sortedUids = tagUids.slice().sort((a, b) => {
-          if (a === meUid) return 1;
-          if (b === meUid) return -1;
+          if (a === myUid) return 1;
+          if (b === myUid) return -1;
           return 0;
         });
         tagHtml = `<span class="tag-avs">${sortedUids.map(u => getAvatarHtml(u, '24px')).join('')}</span>`;
@@ -1268,24 +1344,29 @@ ScreenRenderers.saved = function () {
   histTitle.innerHTML = '<h2>Monthly History</h2>';
   wrap.appendChild(histTitle);
 
-  const members = Object.keys(App.settings?.members || {});
-  const otherUid = members.find(uid => uid !== App.user.uid);
-
   App.history.slice(0, 3).forEach(r => {
-    const b = Number(r.budgetSnapshot) || 0;
-    const spent = Number(r.totalSpent) || 0;
-    const saved = b - spent;
-    const partnerSaved = Math.round(saved * 0.6);
-    const mySaved = Math.round(saved * 0.4);
+    const splits = computeMemberSplits(r);
+    const totalRowSaved = splits.reduce((a, x) => a + x.saved, 0) || (Number(r.budgetSnapshot) - Number(r.totalSpent));
+
+    // Order: other member first (left), me (right) — matches mockup
+    const sorted = splits.slice().sort((a, b) => {
+      if (a.uid === App.user.uid) return 1;
+      if (b.uid === App.user.uid) return -1;
+      return 0;
+    });
+
+    const leftHtml = sorted.length > 0
+      ? `<div class="p">${getAvatarHtml(sorted[0].uid, '24px')} ${fmtAmount(sorted[0].saved)}</div>`
+      : '';
+    const rightHtml = sorted.length > 1
+      ? `<div class="p right">${fmtAmount(sorted[1].saved)} ${getAvatarHtml(sorted[1].uid, '24px')}</div>`
+      : '';
 
     const hc = document.createElement('div');
     hc.className = 'hcard';
-    hc.innerHTML = 
-      '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(saved) + '</span></div>' +
-      `<div class="hist-split-row">` +
-        `<div class="p">${getAvatarHtml(otherUid, '24px')} ${fmtAmount(partnerSaved)}</div>` +
-        `<div class="p right">${fmtAmount(mySaved)} ${getAvatarHtml(App.user.uid, '24px')}</div>` +
-      `</div>`;
+    hc.innerHTML =
+      '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(totalRowSaved) + '</span></div>' +
+      `<div class="hist-split-row">${leftHtml}${rightHtml}</div>`;
     wrap.appendChild(hc);
   });
 
@@ -1295,1080 +1376,3 @@ ScreenRenderers.saved = function () {
   }, 0);
   return wrap;
 };
-
-ScreenRenderers.settings = function () {
-  const s = App.settings || DEFAULT_SETTINGS;
-  const us = App.userSettings || DEFAULT_USER_SETTINGS;
-  const members = s.members || {};
-  const myMember = (App.user && members[App.user.uid]) || {};
-  const mySalary = Number(us.salary) || 0;
-  const salaryOk = mySalary > 0;
-
-  const wrap = document.createElement('div');
-  wrap.appendChild(makeAppHead('Tune things,', 'Settings'));
-
-  wrap.appendChild(sectionTitle('Profile'));
-  const pg = group();
-  const arow = document.createElement('div');
-  arow.className = 'avatar-row';
-  const avatarHtml = myMember.avatarBase64
-    ? '<div class="big-avatar" style="background-image:url(' + myMember.avatarBase64 + ');"></div>'
-    : '<div class="big-avatar">' + esc(myMember.initial || 'U') + '</div>';
-  arow.innerHTML =
-    avatarHtml +
-    '<div class="info">' +
-      '<div class="t">' + esc(myMember.name || 'My Profile') + '</div>' +
-      '<div class="s">Tap to change name & avatar</div>' +
-    '</div>' +
-    '<span class="chev">›</span>';
-  arow.onclick = () => openProfileEditor();
-  pg.appendChild(arow);
-  wrap.appendChild(pg);
-
-  wrap.appendChild(sectionTitle('General'));
-  const gg = group();
-  gg.appendChild(rowInput('Total budget', 'set-totalbudget', s.totalBudget || 0));
-  gg.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
-  wrap.appendChild(gg);
-
-  wrap.appendChild(sectionTitle('My Finances'));
-  const mg = group();
-  mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
-
-  const budgetStack = document.createElement('div');
-  budgetStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
-  budgetStack.innerHTML = '<span class="lbl">My Budget Contribution' +
-    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') + '</span>';
-  const budgetSegWrap = document.createElement('div');
-  budgetSegWrap.className = 'segmented-wrap';
-  budgetSegWrap.innerHTML = '<div class="segmented" id="budget-method-seg"' +
-    (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
-    '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-    '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
-    '</div>';
-  budgetStack.appendChild(budgetSegWrap);
-  const budgetInputLine = document.createElement('div');
-  budgetInputLine.className = 'input-line';
-  budgetInputLine.innerHTML = '<input id="set-budget-fixed" ' +
-    (!salaryOk ? 'disabled' : '') +
-    ' value="' + (us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)) + '"><span class="unit">' +
-    (us.budgetMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>';
-  budgetStack.appendChild(budgetInputLine);
-  mg.appendChild(budgetStack);
-
-  const toPayStack = document.createElement('div');
-  toPayStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
-  toPayStack.innerHTML = '<span class="lbl">My To Pay Share' +
-    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') + '</span>';
-  const toPaySegWrap = document.createElement('div');
-  toPaySegWrap.className = 'segmented-wrap';
-  toPaySegWrap.innerHTML = '<div class="segmented" id="topay-method-seg"' +
-    (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
-    '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-    '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
-    '</div>';
-  toPayStack.appendChild(toPaySegWrap);
-  const toPayInputLine = document.createElement('div');
-  toPayInputLine.className = 'input-line';
-  toPayInputLine.innerHTML = '<input id="set-topay-fixed" ' +
-    (!salaryOk ? 'disabled' : '') +
-    ' value="' + (us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)) + '"><span class="unit">' +
-    (us.toPayMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>';
-  toPayStack.appendChild(toPayInputLine);
-  mg.appendChild(toPayStack);
-
-  mg.appendChild(rowToggle('Track savings', us.trackSavings, (el) => {
-    if (!salaryOk) { toast('Enter salary first'); el.classList.remove('on'); return; }
-    updateUserSetting('trackSavings', el.classList.contains('on'));
-  }));
-  wrap.appendChild(mg);
-
-  wrap.appendChild(sectionTitle('Appearance'));
-  const appear = group();
-  const themeRow = document.createElement('div');
-  themeRow.className = 'row';
-  themeRow.style.cursor = 'default';
-  themeRow.innerHTML = '<span class="lbl">Theme</span>';
-  const seg = document.createElement('div');
-  seg.className = 'segmented';
-  ['light','dark','system'].forEach(opt => {
-    const b = document.createElement('button');
-    b.textContent = opt[0].toUpperCase() + opt.slice(1);
-    b.dataset.theme = opt;
-    if (us.theme === opt) b.className = 'active';
-    b.onclick = () => changeTheme(opt);
-    seg.appendChild(b);
-  });
-  themeRow.appendChild(seg);
-  appear.appendChild(themeRow);
-
-  const toneRow = document.createElement('div');
-  toneRow.className = 'row';
-  toneRow.innerHTML = '<span class="lbl">Hero tone</span>' +
-    '<div style="width:56px;height:26px;border-radius:8px;background:linear-gradient(160deg,var(--hero-a),var(--hero-b));"></div>';
-  toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
-  appear.appendChild(toneRow);
-
-  ['sub','rep','debt'].forEach(type => {
-    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill' }[type];
-    const row = document.createElement('div');
-    row.className = 'row';
-    const pc = s.pillColors || {};
-    const colorKey = pc[type] || 'blue';
-    row.innerHTML = '<span class="lbl">' + label + '</span><div class="swatch c-' + colorKey + '"></div>';
-    row.onclick = () => openPillColorPicker(type);
-    appear.appendChild(row);
-  });
-
-  wrap.appendChild(appear);
-
-  wrap.appendChild(sectionTitle('Reset'));
-  const reset = group();
-  const topayDayRow = document.createElement('div');
-  topayDayRow.className = 'row';
-  const dayVal = s.toPayResetDay === 'last' || s.toPayResetDay == null ? 'Last day ›' : s.toPayResetDay + 'th ›';
-  topayDayRow.innerHTML = '<span class="lbl">To Pay reset day</span><span class="val">' + esc(dayVal) + '</span>';
-  topayDayRow.onclick = () => openResetDayPicker();
-  reset.appendChild(topayDayRow);
-
-  const runRow = document.createElement('div');
-  runRow.className = 'row';
-  runRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Run To Pay reset now</span><span style="color:var(--text3);">›</span>';
-  runRow.onclick = () => confirmRunReset();
-  reset.appendChild(runRow);
-  wrap.appendChild(reset);
-
-  wrap.appendChild(sectionTitle('Members & Safety'));
-  const memberGroup = group();
-  const bannedUids = s.bannedUids || [];
-  const ownerUids = s.owners || [];
-  Object.entries(members).forEach(([uid, m]) => {
-    const row = document.createElement('div');
-    row.className = 'row';
-    const isOwner = ownerUids.includes(uid);
-    const isBanned = bannedUids.includes(uid);
-    const isMe = uid === App.user.uid;
-    row.innerHTML = '<span class="lbl">' + esc(m.name || m.email || uid) + (isOwner ? ' · Owner' : '') + (isMe ? ' (you)' : '') + '</span>' +
-      (isBanned ? '<span class="val" style="color:var(--red);">Banned</span>' :
-        isOwner ? '<span class="val">Protected</span>' :
-        '<span class="val" style="color:var(--red);font-weight:600;">Ban ›</span>');
-    if (!isOwner && !isBanned && !isMe) {
-      row.onclick = () => confirmBanMember(uid, m);
-    }
-    memberGroup.appendChild(row);
-  });
-  if (bannedUids.length > 0) {
-    const clearRow = document.createElement('div');
-    clearRow.className = 'row';
-    clearRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Clear Banned List (' + bannedUids.length + ')</span>';
-    clearRow.onclick = () => confirmClearBanned();
-    memberGroup.appendChild(clearRow);
-  }
-  wrap.appendChild(memberGroup);
-
-  wrap.appendChild(sectionTitle('Account'));
-  const acct = group();
-  const emailRow = document.createElement('div');
-  emailRow.className = 'row';
-  emailRow.innerHTML = '<span class="lbl">Email Address</span><span class="val">' + esc(App.user?.email || '—') + '</span>';
-  emailRow.onclick = () => changeEmail();
-  acct.appendChild(emailRow);
-  
-  const exportRow = document.createElement('div');
-  exportRow.className = 'row';
-  exportRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Export Data (Backup)</span>';
-  exportRow.onclick = () => exportData();
-  acct.appendChild(exportRow);
-
-  const importRow = document.createElement('div');
-  importRow.className = 'row';
-  importRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Import Data (Restore)</span>';
-  importRow.onclick = () => importData();
-  acct.appendChild(importRow);
-  
-  wrap.appendChild(acct);
-
-  wrap.appendChild(sectionTitle('Danger Zone'));
-  const dz = group();
-  const resetRow = document.createElement('div');
-  resetRow.className = 'row';
-  resetRow.innerHTML = '<span class="lbl" style="color:var(--red);font-weight:600;">Hard Reset App</span>';
-  resetRow.onclick = () => confirmHardReset();
-  dz.appendChild(resetRow);
-  wrap.appendChild(dz);
-
-  const signOutBtn = document.createElement('button');
-  signOutBtn.className = 'danger-pill';
-  signOutBtn.textContent = 'Sign out';
-  signOutBtn.onclick = () => { if (confirm('Sign out?')) FB.signOut(FB.auth); };
-  wrap.appendChild(signOutBtn);
-  wrap.appendChild(h('div', { style: 'height:40px;' }));
-
-  setTimeout(() => {
-    const budgetSeg = document.getElementById('budget-method-seg');
-    if (budgetSeg) budgetSeg.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        if (!salaryOk) { toast('Enter salary first'); return; }
-        const newMethod = b.dataset.method;
-        if (newMethod !== us.budgetMethod) {
-          if (newMethod === 'pct') {
-            const total = Number(s.totalBudget) || 0;
-            const fixed = Number(us.budgetFixed) || 0;
-            updateUserSetting('budgetPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
-          } else {
-            const total = Number(s.totalBudget) || 0;
-            const pct = Number(us.budgetPct) || 0;
-            updateUserSetting('budgetFixed', Math.round(total * pct / 100));
-          }
-          updateUserSetting('budgetMethod', newMethod);
-        }
-      };
-    });
-    const toPaySeg = document.getElementById('topay-method-seg');
-    if (toPaySeg) toPaySeg.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        if (!salaryOk) { toast('Enter salary first'); return; }
-        const newMethod = b.dataset.method;
-        if (newMethod !== us.toPayMethod) {
-          if (newMethod === 'pct') {
-            const total = Number(s.totalBudget) || 0;
-            const fixed = Number(us.toPayFixed) || 0;
-            updateUserSetting('toPayPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
-          } else {
-            const total = Number(s.totalBudget) || 0;
-            const pct = Number(us.toPayPct) || 0;
-            updateUserSetting('toPayFixed', Math.round(total * pct / 100));
-          }
-          updateUserSetting('toPayMethod', newMethod);
-        }
-      };
-    });
-    bindInput('set-totalbudget', v => saveSetting('totalBudget', Number(v) || 0));
-    bindInput('set-startday', v => {
-      const n = parseInt(v, 10);
-      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
-    });
-    bindInput('set-salary', v => updateUserSetting('salary', Number(v) || 0));
-    bindInput('set-budget-fixed', v => {
-      if (!salaryOk) { toast('Enter salary first'); return; }
-      if (us.budgetMethod === 'pct') updateUserSetting('budgetPct', Number(v) || 0);
-      else updateUserSetting('budgetFixed', Number(v) || 0);
-    });
-    bindInput('set-topay-fixed', v => {
-      if (!salaryOk) { toast('Enter salary first'); return; }
-      if (us.toPayMethod === 'pct') updateUserSetting('toPayPct', Number(v) || 0);
-      else updateUserSetting('toPayFixed', Number(v) || 0);
-    });
-  }, 0);
-  return wrap;
-};
-
-function sectionTitle(text, count) {
-  const el = document.createElement('div');
-  el.className = 'secttl';
-  el.innerHTML = esc(text) + (count ? ' <span class="count">' + esc(count) + '</span>' : '');
-  return el;
-}
-function group() { const g = document.createElement('div'); g.className = 'group'; return g; }
-function rowInput(label, id, value) {
-  const r = document.createElement('div');
-  r.className = 'row';
-  r.innerHTML = '<span class="lbl">' + esc(label) + '</span>' +
-    '<input class="field" id="' + id + '" value="' + esc(value) + '">';
-  return r;
-}
-function rowToggle(label, isOn, onClick) {
-  const r = document.createElement('div');
-  r.className = 'row';
-  r.innerHTML = '<span class="lbl">' + esc(label) + '</span>' +
-    '<div class="pin-toggle' + (isOn ? ' on' : '') + '"></div>';
-  r.onclick = () => {
-    const el = r.querySelector('.pin-toggle');
-    el.classList.toggle('on');
-    onClick(el);
-  };
-  return r;
-}
-function bindInput(id, onCommit) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener('blur', () => onCommit(el.value));
-  el.addEventListener('keydown', ev => { if (ev.key === 'Enter') el.blur(); });
-}
-function saveSetting(key, value) { FB.updateDoc(budgetDoc(), { [key]: value }); }
-function updateUserSetting(key, value) {
-  if (!App.user) return;
-  FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.' + key]: value });
-}
-function changeTheme(theme) {
-  updateUserSetting('theme', theme);
-  document.body.setAttribute('data-theme', theme === 'system'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : theme);
-  document.querySelectorAll('.segmented button').forEach(b => {
-    b.classList.toggle('active', b.dataset.theme === theme);
-  });
-}
-
-function confirmBanMember(uid, m) {
-  const name = m.name || m.email || uid;
-  if (!confirm('Ban "' + name + '"?\n\nThey will be signed out on their next app load and blocked from returning.')) return;
-  const s = App.settings || DEFAULT_SETTINGS;
-  const ownerUids = s.owners || [];
-  if (ownerUids.includes(uid)) { toast('Cannot ban an owner'); return; }
-  const bannedUids = (s.bannedUids || []).slice();
-  if (!bannedUids.includes(uid)) bannedUids.push(uid);
-  FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been banned'));
-}
-function confirmClearBanned() {
-  const s = App.settings || DEFAULT_SETTINGS;
-  const bannedUids = s.bannedUids || [];
-  if (bannedUids.length === 0) return;
-  if (!confirm('Clear the banned list?\n\n' + bannedUids.length + ' user(s) will be able to sign in again.')) return;
-  if (!confirm('Are you sure? They will regain access to the shared budget.')) return;
-  FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
-}
-
-function openProfileEditor() {
-  const s = App.settings || DEFAULT_SETTINGS;
-  const members = s.members || {};
-  const myMember = (App.user && members[App.user.uid]) || {};
-
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>Edit Profile</h3>';
-    const nameF = document.createElement('div');
-    nameF.className = 'field';
-    nameF.innerHTML = '<label>Name</label><input id="prof-name" value="' + esc(myMember.name || '') + '" placeholder="Your name">';
-    body.appendChild(nameF);
-
-    const preview = document.createElement('div');
-    preview.style.cssText = 'display:flex;justify-content:center;padding:16px 0;';
-    const av = document.createElement('div');
-    av.style.cssText = 'width:96px;height:96px;border-radius:48px;background:linear-gradient(135deg,#7c5cff,#0a84ff);background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:28px;box-shadow:0 6px 20px rgba(10,132,255,.35);';
-    if (myMember.avatarBase64) av.style.backgroundImage = 'url(' + myMember.avatarBase64 + ')';
-    else av.textContent = myMember.initial || 'U';
-    preview.appendChild(av);
-    body.appendChild(preview);
-
-    const upload = document.createElement('div');
-    upload.className = 'field';
-    upload.style.cursor = 'pointer';
-    upload.innerHTML = '<span style="font-weight:600;color:var(--blue);">📷 Upload image</span><span style="color:var(--text3);">›</span>';
-    upload.onclick = () => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-      input.onchange = async (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-        try {
-          const b64 = await resizeImageToBase64(file, 256);
-          await saveAvatar(b64);
-          closeSheet();
-          toast('Avatar updated');
-        } catch (err) { toast('Could not process image'); }
-      };
-      input.click();
-    };
-    body.appendChild(upload);
-
-    if (myMember.avatarBase64) {
-      const remove = document.createElement('div');
-      remove.className = 'field';
-      remove.style.cursor = 'pointer';
-      remove.innerHTML = '<span style="font-weight:600;color:var(--red);">Remove picture</span><span style="color:var(--text3);">›</span>';
-      remove.onclick = async () => { await saveAvatar(null); closeSheet(); toast('Avatar removed'); };
-      body.appendChild(remove);
-    }
-
-    footer.innerHTML = '';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Save Profile';
-    saveBtn.onclick = async () => {
-      const newName = document.getElementById('prof-name').value.trim();
-      await FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.name']: newName });
-      closeSheet();
-      toast('Profile updated');
-    };
-    footer.appendChild(saveBtn);
-  });
-}
-
-async function saveAvatar(b64) {
-  if (!App.user) return;
-  try {
-    await FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.avatarBase64']: b64 });
-  } catch (e) { console.error('save avatar:', e); }
-}
-
-function resizeImageToBase64(file, size) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = size; canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        const minDim = Math.min(img.width, img.height);
-        const sx = (img.width - minDim) / 2;
-        const sy = (img.height - minDim) / 2;
-        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.8));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function openGoalEditor() {
-  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tagUids: [], monthlySplit: {} };
-  showGoalSheet(g, true);
-}
-function openGoalSheet(g) {
-  showGoalSheet(g, false);
-}
-
-function showGoalSheet(g, isNew) {
-  openSheet((body, footer) => {
-    body.innerHTML = '';
-    
-    const heroDiv = document.createElement('div');
-    heroDiv.className = 'v4-hero';
-    
-    const iconEl = document.createElement('div');
-    iconEl.className = 'v4-icon';
-    iconEl.textContent = g.icon || '🎯';
-    iconEl.onclick = () => {
-      buildIconPickerInline(g.icon || '🎯', async (emoji) => {
-        g.icon = emoji;
-        iconEl.textContent = emoji;
-        if (!isNew) await FB.updateDoc(FB.doc(goalsCol(), g.id), { icon: emoji });
-      });
-    };
-    heroDiv.appendChild(iconEl);
-
-    const titleInput = document.createElement('input');
-    titleInput.className = 'v4-title-input';
-    titleInput.value = g.name || 'New Goal';
-    titleInput.placeholder = 'Goal Name';
-    heroDiv.appendChild(titleInput);
-
-    const amtInput = document.createElement('input');
-    amtInput.className = 'v4-amount-input';
-    amtInput.value = g.target || '';
-    amtInput.placeholder = '0';
-    amtInput.inputMode = 'numeric';
-    heroDiv.appendChild(amtInput);
-    
-    body.appendChild(heroDiv);
-
-    const dateRow = document.createElement('div');
-    dateRow.className = 'v4-row';
-    dateRow.innerHTML = '<label>Target Date (Optional)</label>' +
-      '<input id="g-date" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(g.targetDate) + '">';
-    body.appendChild(dateRow);
-    const dInp = dateRow.querySelector('#g-date');
-    dInp.addEventListener('input', () => autoSlashDate(dInp));
-
-    const colorRow = document.createElement('div');
-    colorRow.className = 'v4-row';
-    colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" id="g-swatch" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
-    colorRow.onclick = () => {
-      openColorPicker(g.colorKey || 'green', (newKey) => {
-        g.colorKey = newKey;
-        const sw = document.getElementById('g-swatch');
-        if (sw) {
-          sw.className = 'swatch c-' + newKey;
-          sw.style.background = '';
-        }
-        if (!isNew) FB.updateDoc(FB.doc(goalsCol(), g.id), { colorKey: newKey });
-      });
-    };
-    body.appendChild(colorRow);
-
-    let currentTagUids = Array.isArray(g.tagUids) ? g.tagUids.slice() : [];
-    const members = Object.keys(App.settings?.members || {});
-    const memberList = members.map(uid => ({
-      uid,
-      name: displayName(uid),
-      isMe: uid === App.user.uid,
-    }));
-
-    let perPerson = {};
-    memberList.forEach(m => { perPerson[m.uid] = 0; });
-    if (g.monthlySplit) Object.assign(perPerson, g.monthlySplit);
-
-    function renderSplits() {
-      const container = document.getElementById('g-splits-container');
-      if (!container) return;
-      container.innerHTML = '';
-      
-      const activeMembers = memberList.filter(m => currentTagUids.includes(m.uid));
-      if (activeMembers.length === 0) return;
-      
-      const list = document.createElement('div');
-      list.className = 'gsplits';
-      
-      let total = 0;
-      activeMembers.forEach(m => {
-        const amt = Number(perPerson[m.uid]) || 0;
-        total += amt;
-        const row = document.createElement('div');
-        row.className = 'gsplit-row';
-        row.innerHTML = getAvatarHtml(m.uid, '28px') +
-          '<div class="label">' + esc(m.name) + '</div>' +
-          '<div class="chip"><input type="number" data-uid="' + m.uid + '" value="' + amt + '"><span class="u">/ mo</span></div>';
-        list.appendChild(row);
-      });
-      
-      const foot = document.createElement('div');
-      foot.className = 'gsplit-foot';
-      foot.innerHTML = '<span>Total monthly</span><span>' + fmtAmount(total) + ' ' + esc(App.settings?.currency || 'SEK') + '</span>';
-      list.appendChild(foot);
-      
-      container.appendChild(list);
-      
-      list.querySelectorAll('input[data-uid]').forEach(inp => {
-        inp.addEventListener('input', () => {
-          perPerson[inp.dataset.uid] = Number(inp.value) || 0;
-          renderSplits();
-        });
-      });
-    }
-
-    const whoRow = document.createElement('div');
-    whoRow.className = 'v4-row';
-    whoRow.style.flexDirection = 'column';
-    whoRow.style.alignItems = 'flex-start';
-    whoRow.innerHTML = '<label style="margin-bottom:8px;">Who is this goal for?</label>';
-    const whoSeg = document.createElement('div');
-    whoSeg.className = 'segmented';
-    whoSeg.style.width = '100%';
-    whoSeg.style.flexWrap = 'wrap';
-    whoSeg.style.gap = '2px';
-    
-    memberList.forEach(m => {
-      const b = document.createElement('button');
-      b.textContent = m.name;
-      b.style.flex = '1';
-      if (currentTagUids.includes(m.uid)) b.className = 'active';
-      b.onclick = () => {
-        if (currentTagUids.includes(m.uid)) {
-          currentTagUids = currentTagUids.filter(u => u !== m.uid);
-          b.classList.remove('active');
-        } else {
-          currentTagUids.push(m.uid);
-          b.classList.add('active');
-        }
-        renderSplits();
-      };
-      whoSeg.appendChild(b);
-    });
-    whoRow.appendChild(whoSeg);
-    body.appendChild(whoRow);
-
-    const splitsContainer = document.createElement('div');
-    splitsContainer.id = 'g-splits-container';
-    body.appendChild(splitsContainer);
-    renderSplits();
-
-    const actionsDiv = document.createElement('div');
-    actionsDiv.className = 'v4-actions';
-    
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'v4-btn-save';
-    saveBtn.textContent = isNew ? 'Create Goal' : 'Save Goal';
-    saveBtn.onclick = async () => {
-      const name = titleInput.value.trim();
-      const target = Number(amtInput.value);
-      const targetDate = ddmmyyyyToISO(dInp.value) || '';
-      if (!name || !target) { toast('Name and Amount required'); return; }
-      if (currentTagUids.length === 0) { toast('Pick at least one person'); return; }
-      
-      const monthlySplit = {};
-      const autoTotal = currentTagUids.reduce((acc, uid) => acc + (Number(perPerson[uid]) || 0), 0);
-      currentTagUids.forEach(uid => { monthlySplit[uid] = Number(perPerson[uid]) || 0; });
-      
-      closeSheet();
-      if (isNew) {
-        await FB.addDoc(goalsCol(), {
-          name, icon: g.icon, target, current: 0,
-          autoAmount: autoTotal,
-          monthlySplit,
-          tagUids: currentTagUids,
-          targetDate, colorKey: g.colorKey,
-          createdAt: new Date().toISOString()
-        });
-      } else {
-        await FB.updateDoc(FB.doc(goalsCol(), g.id), {
-          name, icon: g.icon, target, targetDate,
-          colorKey: g.colorKey,
-          tagUids: currentTagUids,
-          autoAmount: autoTotal,
-          monthlySplit,
-        });
-      }
-    };
-    actionsDiv.appendChild(saveBtn);
-
-    if (!isNew) {
-      const delBtn = document.createElement('button');
-      delBtn.className = 'v4-btn-del';
-      delBtn.innerHTML = 'Delete';
-      delBtn.onclick = async () => {
-        if (!confirm('Delete this goal?')) return;
-        closeSheet();
-        await FB.deleteDoc(FB.doc(goalsCol(), g.id));
-      };
-      actionsDiv.appendChild(delBtn);
-    }
-    
-    body.appendChild(actionsDiv);
-    footer.innerHTML = '';
-  });
-}
-
-function openCategoryEditor(cat) {
-  const isNew = !cat;
-  const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
-
-  let pinState = (App.userSettings.pins || []).includes(editing.id);
-
-  openSheet((body, footer) => {
-    body.innerHTML = '';
-    const h3 = document.createElement('h3');
-    h3.textContent = isNew ? 'New category' : 'Edit category';
-    body.appendChild(h3);
-
-    const nameF = document.createElement('div');
-    nameF.className = 'field';
-    nameF.innerHTML = '<label>Name</label><input id="ce-name" value="' + esc(editing.name) + '">';
-    body.appendChild(nameF);
-
-    const limF = document.createElement('div');
-    limF.className = 'field';
-    limF.innerHTML = '<label>Limit</label><input id="ce-limit" inputmode="numeric" value="' + (editing.limit || 0) + '">';
-    body.appendChild(limF);
-
-    const pinF = document.createElement('div');
-    pinF.className = 'field';
-    pinF.style.cursor = 'pointer';
-    pinF.innerHTML = '<label>Pin to Home</label>' +
-      '<div class="pin-toggle' + (pinState ? ' on' : '') + '" id="ce-pin-toggle"></div>';
-    body.appendChild(pinF);
-    pinF.onclick = () => {
-      const toggle = document.getElementById('ce-pin-toggle');
-      let currentPins = App.userSettings.pins || [];
-      if (pinState) {
-        currentPins = currentPins.filter(id => id !== editing.id);
-        toggle.classList.remove('on');
-        pinState = false;
-      } else {
-        if (currentPins.length >= 4) { toast('Max 4 pins'); return; }
-        currentPins.push(editing.id);
-        toggle.classList.add('on');
-        pinState = true;
-      }
-      updateUserSetting('pins', currentPins);
-    };
-
-    const iconF = document.createElement('div');
-    iconF.className = 'field';
-    iconF.style.cursor = 'pointer';
-    iconF.innerHTML = '<label>Icon</label>' +
-      '<div style="display:flex;align-items:center;gap:10px;">' +
-        '<span id="ce-icon-val" style="font-size:20px;">' + esc(editing.icon || '🏷️') + '</span>' +
-        '<span style="color:var(--text3);">›</span>' +
-      '</div>';
-    body.appendChild(iconF);
-    const iconPanel = document.createElement('div');
-    iconPanel.style.display = 'none';
-    body.appendChild(iconPanel);
-
-    const colorF = document.createElement('div');
-    colorF.className = 'field c-' + (editing.colorKey || 'blue');
-    colorF.style.cursor = 'pointer';
-    colorF.innerHTML = '<label>Color</label>' +
-      '<div style="display:flex;align-items:center;gap:10px;">' +
-        '<div class="color-swatch"></div>' +
-        '<span style="color:var(--text3);">›</span>' +
-      '</div>';
-    body.appendChild(colorF);
-    const colorPanel = document.createElement('div');
-    colorPanel.style.display = 'none';
-    body.appendChild(colorPanel);
-
-    iconF.onclick = () => {
-      const open = iconPanel.style.display !== 'none';
-      if (open) { iconPanel.style.display = 'none'; return; }
-      iconPanel.style.display = '';
-      colorPanel.style.display = 'none';
-      buildIconPicker(iconPanel, editing.icon || '🏷️', (emoji) => {
-        editing.icon = emoji;
-        document.getElementById('ce-icon-val').textContent = emoji;
-        iconPanel.style.display = 'none';
-      });
-    };
-    colorF.onclick = () => {
-      const open = colorPanel.style.display !== 'none';
-      if (open) { colorPanel.style.display = 'none'; return; }
-      colorPanel.style.display = '';
-      iconPanel.style.display = 'none';
-      buildColorPicker(colorPanel, editing.colorKey || 'blue', (key) => {
-        editing.colorKey = key;
-        colorF.className = 'field c-' + key;
-        colorPanel.style.display = 'none';
-      });
-    };
-
-    footer.innerHTML = '';
-    const save = document.createElement('button');
-    save.className = 'primary';
-    save.textContent = isNew ? 'Create' : 'Save';
-    save.onclick = async () => {
-      const name = document.getElementById('ce-name').value.trim();
-      if (!name) { toast('Name required'); return; }
-      const limit = Number(document.getElementById('ce-limit').value) || 0;
-      const data = { name, limit, icon: editing.icon || '🏷️', colorKey: editing.colorKey || 'blue', parentId: editing.parentId || '' };
-      closeSheet();
-      if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
-    };
-    footer.appendChild(save);
-
-    if (!isNew) {
-      const del = h('button', { class: 'danger' }, 'Delete');
-      del.onclick = async () => {
-        if (!confirm('Delete "' + cat.name + '"? Historical expenses keep their name.')) return;
-        closeSheet();
-        await FB.deleteDoc(FB.doc(categoriesCol(), cat.id));
-      };
-      footer.appendChild(del);
-    }
-  });
-}
-
-const PALETTE = [
-  'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
-  'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
-  'amber','orange','tangerine','coral','gold','mustard','apricot','peach','saffron','honey',
-  'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
-  'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
-];
-function buildColorPicker(container, current, onPick) {
-  container.innerHTML = '';
-  const grid = document.createElement('div');
-  grid.className = 'palette-grid';
-  PALETTE.forEach(key => {
-    const chip = document.createElement('div');
-    chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
-    chip.onclick = () => {
-      grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
-      chip.classList.add('on');
-      onPick(key);
-    };
-    grid.appendChild(chip);
-  });
-  container.appendChild(grid);
-}
-function openColorPicker(current, onPick) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick Color</h3>';
-    const container = document.createElement('div');
-    body.appendChild(container);
-    buildColorPicker(container, current, (key) => { onPick(key); closeSheet(); });
-  });
-}
-function openPillColorPicker(type) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick Pill Color</h3>';
-    const grid = document.createElement('div');
-    grid.className = 'palette-grid';
-    const pc = (App.settings && App.settings.pillColors) || {};
-    const current = pc[type] || 'blue';
-    PALETTE.forEach(key => {
-      const chip = document.createElement('div');
-      chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
-      chip.onclick = async () => {
-        const newPC = { ...(App.settings.pillColors || {}), [type]: key };
-        await saveSetting('pillColors', newPC);
-        closeSheet();
-      };
-      grid.appendChild(chip);
-    });
-    body.appendChild(grid);
-  });
-}
-
-const ICONS = {
-  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
-  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
-  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
-  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
-  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
-  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
-  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
-  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
-  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
-  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
-  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
-};
-function buildIconPicker(container, current, onPick) {
-  container.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'icon-picker';
-
-  const search = document.createElement('input');
-  search.className = 'icon-search';
-  search.placeholder = '🔍  Search icons…';
-  wrap.appendChild(search);
-
-  const scroll = document.createElement('div');
-
-  function render(q) {
-    scroll.innerHTML = '';
-    const query = (q || '').toLowerCase().trim();
-    let any = false;
-    Object.entries(ICONS).forEach(([cat, list]) => {
-      const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
-      if (!matches.length) return;
-      any = true;
-      const label = document.createElement('div');
-      label.className = 'icon-cat-label';
-      label.textContent = cat;
-      scroll.appendChild(label);
-      const grid = document.createElement('div');
-      grid.className = 'icon-grid';
-      matches.forEach(([emoji]) => {
-        const btn = document.createElement('button');
-        btn.className = 'icon-btn' + (emoji === current ? ' on' : '');
-        btn.textContent = emoji;
-        btn.onclick = () => {
-          current = emoji;
-          grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
-          btn.classList.add('on');
-          onPick(emoji);
-        };
-        grid.appendChild(btn);
-      });
-      scroll.appendChild(grid);
-    });
-    if (!any) {
-      const empty = document.createElement('div');
-      empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
-      empty.textContent = 'No icons match "' + query + '"';
-      scroll.appendChild(empty);
-    }
-  }
-  search.oninput = () => render(search.value);
-  wrap.appendChild(scroll);
-
-  const custom = document.createElement('div');
-  custom.className = 'custom-emoji-wrap';
-  custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
-  const ci = custom.querySelector('input');
-  const cb = custom.querySelector('button');
-  const commit = () => { const v = ci.value.trim(); if (!v) return; onPick(v); ci.value = ''; };
-  cb.onclick = commit;
-  ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-  wrap.appendChild(custom);
-
-  container.appendChild(wrap);
-  render('');
-}
-function buildIconPickerInline(current, onPick) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick an Icon</h3>';
-    const container = document.createElement('div');
-    body.appendChild(container);
-    buildIconPicker(container, current, (emoji) => { onPick(emoji); closeSheet(); });
-  });
-}
-
-const TONES = [
-  { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
-  { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
-  { key: 'fire', name: 'Fire', a: '#cb2d3e', b: '#ef473a' }, { key: 'sunrise', name: 'Sunrise', a: '#ff9966', b: '#ff5e62' },
-  { key: 'blood', name: 'Blood', a: '#870000', b: '#190a05' }, { key: 'rose', name: 'Rose', a: '#c9184a', b: '#ff8fab' },
-  { key: 'grape', name: 'Grape', a: '#5f0f40', b: '#9a031e' }, { key: 'plumfire', name: 'Plum Fire', a: '#4b134f', b: '#c94b4b' },
-  { key: 'indigosun', name: 'Indigo Sun', a: '#1a2a6c', b: '#b21f1f' }, { key: 'lava', name: 'Lava', a: '#ff512f', b: '#dd2476' },
-  { key: 'rosegold', name: 'Rose Gold', a: '#b24592', b: '#f15f79' }, { key: 'twilight', name: 'Twilight', a: '#3a1c71', b: '#d76d77' },
-  { key: 'berry', name: 'Berry', a: '#6a0572', b: '#ab83a1' }, { key: 'cosmic', name: 'Cosmic', a: '#ff00cc', b: '#333399' },
-  { key: 'electric', name: 'Electric', a: '#4776e6', b: '#8e54e9' }, { key: 'nebula', name: 'Nebula', a: '#8e2de2', b: '#4a00e0' },
-  { key: 'berrywine', name: 'Berry Wine', a: '#41295a', b: '#2f0743' }, { key: 'midnight', name: 'Midnight', a: '#1a1a2e', b: '#3b2f6b' },
-  { key: 'ocean', name: 'Ocean', a: '#0a84ff', b: '#5b4bff' }, { key: 'midnightsea', name: 'Midnight Sea', a: '#141e30', b: '#243b55' },
-  { key: 'aurora', name: 'Aurora', a: '#00b4db', b: '#0083b0' }, { key: 'tealnight', name: 'Teal Night', a: '#0f2027', b: '#2c5364' },
-  { key: 'deepsea', name: 'Deep Sea', a: '#2c3e50', b: '#4ca1af' }, { key: 'emerald', name: 'Emerald', a: '#0f766e', b: '#14b8a6' },
-  { key: 'mint', name: 'Mint', a: '#009688', b: '#7fdbca' }, { key: 'jungle', name: 'Jungle', a: '#134e5e', b: '#71b280' },
-  { key: 'forest', name: 'Forest', a: '#1b4332', b: '#40916c' }, { key: 'steel', name: 'Steel', a: '#485563', b: '#29323c' },
-  { key: 'graphite', name: 'Graphite', a: '#2b2d42', b: '#4a4e69' }, { key: 'slate', name: 'Slate', a: '#33415c', b: '#5c6b8a' },
-  { key: 'sand', name: 'Sand', a: '#a47148', b: '#d4a373' }, { key: 'copper', name: 'Copper', a: '#b79891', b: '#94716b' },
-  { key: 'blush', name: 'Blush', a: '#e07a5f', b: '#f2cc8f' },
-];
-function openTonePicker(currentKey) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Hero tone</h3>';
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:4px 0;';
-    TONES.forEach(t => {
-      const tile = document.createElement('div');
-      tile.style.cssText = 'height:64px;border-radius:14px;cursor:pointer;position:relative;' +
-        'color:#fff;font-size:10.5px;font-weight:800;display:flex;align-items:flex-end;' +
-        'padding:7px 9px;text-shadow:0 1px 2px rgba(0,0,0,.3);' +
-        'background:linear-gradient(160deg,' + t.a + ' 0%,' + t.b + ' 100%);';
-      tile.textContent = t.name;
-      if (currentKey === t.key) {
-        const check = document.createElement('div');
-        check.style.cssText = 'position:absolute;top:6px;right:6px;width:18px;height:18px;' +
-          'border-radius:9px;background:#fff;color:#0a0a0a;display:flex;align-items:center;' +
-          'justify-content:center;font-size:11px;font-weight:900;';
-        check.textContent = '✓';
-        tile.appendChild(check);
-      }
-      tile.onclick = () => { updateUserSetting('heroTone', t.key); closeSheet(); };
-      grid.appendChild(tile);
-    });
-    body.appendChild(grid);
-  });
-}
-
-function openExpenseEditor(expense, prefillName) {
-  const isNew = !expense;
-  const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
-
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>' + (isNew ? 'Add expense' : 'Edit expense') + '</h3>';
-    const nameF = document.createElement('div');
-    nameF.className = 'field';
-    nameF.innerHTML = '<label>Name</label><input id="exp-name" value="' + esc(working.name) + '">';
-    body.appendChild(nameF);
-    
-    const amtF = document.createElement('div');
-    amtF.className = 'field';
-    amtF.innerHTML = '<label>Amount</label><input id="exp-amt" inputmode="numeric" value="' + (working.amount || '') + '" placeholder="0">';
-    body.appendChild(amtF);
-
-    const catLbl = document.createElement('div');
-    catLbl.style.cssText = 'font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:14px 4px 8px;';
-    catLbl.textContent = 'Category';
-    body.appendChild(catLbl);
-
-    const parents = App.categories.filter(c => !c.parentId);
-    let chosenCat = working.categoryId || (parents[0] ? parents[0].id : null);
-
-    parents.forEach(c => {
-      const row = document.createElement('div');
-      row.className = 'field';
-      row.style.cursor = 'pointer';
-      row.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
-          '<div class="cat-icon c-' + (c.colorKey || 'blue') + '" style="width:30px;height:30px;border-radius:10px;font-size:14px;display:flex;align-items:center;justify-content:center;">' + esc(c.icon || '🏷️') + '</div>' +
-          '<span style="font-weight:600;">' + esc(c.name) + '</span></div>' +
-        '<span class="cat-check" style="color:var(--blue);font-weight:800;opacity:' + (chosenCat === c.id ? '1' : '0') + '">✓</span>';
-      row.onclick = () => {
-        chosenCat = c.id;
-        body.querySelectorAll('.cat-check').forEach(el => el.style.opacity = '0');
-        row.querySelector('.cat-check').style.opacity = '1';
-      };
-      body.appendChild(row);
-    });
-
-    footer.innerHTML = '';
-    const save = document.createElement('button');
-    save.className = 'primary';
-    save.textContent = isNew ? 'Add expense' : 'Save';
-    save.onclick = async () => {
-      const name = document.getElementById('exp-name').value.trim();
-      const amount = Number(document.getElementById('exp-amt').value);
-      if (!name) { toast('Name required'); return; }
-      if (!amount || amount <= 0) { toast('Amount must be > 0'); return; }
-      if (!chosenCat) { toast('Pick a category'); return; }
-      closeSheet();
-      if (isNew) {
-        const periodKey = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay).key;
-        await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey, createdBy: App.user.uid });
-        await syncCurrentHistoryBudget();
-      } else {
-        await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat });
-        await recomputeHistoryTotal(expense.periodKey);
-      }
-    };
-    footer.appendChild(save);
-
-    if (!isNew) {
-      const del = h('button', { class: 'danger' }, 'Delete');
-      del.onclick = async () => {
-        if (!confirm('Delete "' + expense.name + '"?')) return;
-        closeSheet();
-        await FB.deleteDoc(FB.doc(expensesCol(), expense.id));
-        await recomputeHistoryTotal(expense.periodKey);
-      };
-      footer.appendChild(del);
-    }
-  });
-}
-
-function openToPayEditor(item) {
-  const isNew = !item;
-  if (!item) item = {
-    name: '', amount: null, dueDate: '', paid: false, paidDate: null,
-    isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '',
-    tagUids: [], amountsByUid: {}
-  };
-  let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : item.isDebt ? 'debt' : 'none';
-  let currentTagUids = Array.isArray(item.tagUids) ? item.tagUids.slice() : [];
-  const amountsByUid = { ...(item.amountsByUid || {}) };
-
-  const members = Object.keys(App.settings?.members || {});
-  const memberList = members.map(uid => ({
-    uid,
-    name: displayName(uid),
-    isMe: uid === App.user.uid,
-  }));
-
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>' + (isNew ? 'New payment' : 'Edit payment') + '</h3>';
-    const nameF = document.createElement('div');
-    nameF.className = 'field';
-    nameF.innerHTML = '<label>Name</label><input id="tp-name" value="' + esc(item.name) + '" placeholder="Rent, Internet…">';
-    body.appendChild(nameF);
-    
-    const amtF = document.createElement('div');
-    amtF.className = 'field';
-    amtF.innerHTML = '<label>Amount</label><input id="tp-amt" inputmode="numeric" value="' + (item.amount != null ? item.amount : '') + '" placeholder="Optional">';
-    body.appendChild(amtF);
-
-    const dueF = document.createElement('div');
-    dueF.className = 'field';
-    dueF.innerHTML = '<label>Due date</label><input class="date-input" id="tp-due" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(item.dueDate) + '">';
-    body.appendChild(dueF);
-    const dueInput = dueF.querySelector('#tp-due');
-    dueInput.addEventListener('input', () => autoSlashDate(dueInput));
-
-    const typeF = document.createElement('div');
-    typeF.className = 'field';
-    typeF.innerHTML = '<label>Type</label>';
-    const seg = document.createElement('div');
-    seg.className = 'segmented';
-    [['none','One-time'],['subscription','Sub'],['repeat','Repeat'],['debt','Debt']].forEach(([val, label]) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      if (type === val) b.className = 'active';
-      b.onclick = () => {
-        type = val;
-        seg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        repeatEndF.style.display = (val === 'repeat' || val === 'debt') ? 'flex' : 'none';
-        if (val !== 'none' && !dueInput.value) dueInput.value = isoToDDMMYYYY(localDateString(new Date()));
-      };
-      seg.appendChild(b);
-    });
-    typeF.appendChild(seg);
-    body.appendChild(typeF);
-
-    const repeatEndF = document.createElement('div');
-    repeat
