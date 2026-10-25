@@ -169,7 +169,6 @@ const buyCol        = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'buy');
 const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history');
 const goalsCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'goals');
 
-/* ---------- BOOT ---------- */
 async function startApp() {
   detachListeners();
   try {
@@ -179,19 +178,16 @@ async function startApp() {
       App.settings = { ...DEFAULT_SETTINGS, owners: [App.user.uid] };
     } else {
       App.settings = snap.data();
-      // Fix #9: if banned, sign out
       if ((App.settings.bannedUids || []).includes(App.user.uid)) {
         toast('You have been removed from this household.');
         await FB.signOut(FB.auth);
         return;
       }
-      // Migrations
       const updates = {};
       if (!App.settings.buyLists) updates.buyLists = DEFAULT_SETTINGS.buyLists;
       if (!App.settings.owners) updates.owners = [App.user.uid];
       if (!App.settings.bannedUids) updates.bannedUids = [];
       if (!App.settings.pillColors) updates.pillColors = DEFAULT_SETTINGS.pillColors;
-      // Remove pin from pillColors if it exists
       if (App.settings.pillColors && App.settings.pillColors.pin) {
         const pc = { ...App.settings.pillColors };
         delete pc.pin;
@@ -261,14 +257,12 @@ async function migrateUserSettings() {
   if (migrated) await FB.updateDoc(budgetDoc(), updates);
 }
 
-/* ---------- LISTENERS ---------- */
 function attachListeners() {
   const fail = (n) => (e) => console.error('listener ' + n + ':', e);
 
   App.listeners.push(FB.onSnapshot(budgetDoc(), (snap) => {
     if (snap.exists()) {
       App.settings = snap.data();
-      // Fix #9: kicked user auto-signs-out
       if ((App.settings.bannedUids || []).includes(App.user.uid)) {
         toast('You have been removed.');
         FB.signOut(FB.auth);
@@ -287,7 +281,7 @@ function attachListeners() {
         maybeAutoReset();
         syncCurrentHistoryBudget();
       }
-      if (['home','categories','settings','saved'].includes(App.screen)) renderScreen(App.screen);
+      if (['home','categories','settings','saved','buy'].includes(App.screen)) renderScreen(App.screen);
     }
   }, fail('settings')));
 
@@ -338,7 +332,6 @@ function detachListeners() {
   App.listeners = [];
 }
 
-/* ---------- HELPERS ---------- */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -512,6 +505,14 @@ function getAvatarHtml(uid, size = '32px') {
   return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${parseInt(size)*0.4}px;">${initials}</div>`;
 }
 
+function displayName(uid) {
+  const members = App.settings?.members || {};
+  const m = members[uid];
+  if (!m) return uid;
+  if (uid === App.user?.uid) return 'You';
+  return m.name || m.email || uid;
+}
+
 function makeAppHead(greeting, appName) {
   const head = document.createElement('div');
   head.className = 'apphead';
@@ -588,7 +589,6 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ---------- HOME (same as before but fixes tag rendering — relies on tagUids) ---------- */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -720,7 +720,6 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
-/* ---------- CATEGORIES ---------- */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -804,7 +803,6 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* ---------- BUY (Fix #1: list color + edit + delete) ---------- */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue' }];
@@ -826,16 +824,20 @@ ScreenRenderers.buy = function () {
   selector.className = 'list-selector';
   lists.forEach(l => {
     const chip = document.createElement('div');
-    chip.className = 'list-chip' + (l.id === currentListId ? ' active' : '');
-    const dot = document.createElement('span');
-    dot.className = 'list-color c-' + (l.colorKey || 'blue');
-    chip.appendChild(dot);
-    chip.appendChild(document.createTextNode(l.name));
+    const colorKey = l.colorKey || 'blue';
+    chip.className = 'buy-chip ' + colorKey + (l.id === currentListId ? ' active' : '');
+    if (l.id === currentListId) {
+      chip.style.outline = '2px solid var(--blue)';
+    }
+    chip.textContent = l.name;
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
-    chip.oncontextmenu = (e) => { e.preventDefault(); openListMenu(l); };
-    let t = null;
-    chip.addEventListener('touchstart', () => { t = setTimeout(() => openListMenu(l), 600); });
-    chip.addEventListener('touchend', () => clearTimeout(t));
+    chip.ondblclick = () => openListMenu(l);
+    let lastTap = 0;
+    chip.addEventListener('touchend', () => {
+      const now = Date.now();
+      if (now - lastTap < 300) { openListMenu(l); lastTap = 0; }
+      else lastTap = now;
+    });
     selector.appendChild(chip);
   });
   const addChip = document.createElement('div');
@@ -932,13 +934,12 @@ function openNewListEditor() {
     btn.onclick = async () => {
       const name = document.getElementById('nl-name').value.trim();
       if (!name) return;
-      const lists = (App.settings.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue' }]).slice();
+      const lists = (App.settings.buyLists || []).slice();
       const newList = { id: 'list_' + Date.now(), name, colorKey: chosenColor };
       lists.push(newList);
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       App.activeBuyList = newList.id;
       closeSheet();
-      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
   });
@@ -946,12 +947,10 @@ function openNewListEditor() {
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
-    // Rename
     const nameF = document.createElement('div');
     nameF.className = 'field';
     nameF.innerHTML = '<label>Name</label><input id="lm-name" value="' + esc(l.name) + '">';
     body.appendChild(nameF);
-    // Color
     let chosenColor = l.colorKey || 'blue';
     const colorF = document.createElement('div');
     colorF.className = 'field';
@@ -1001,7 +1000,6 @@ function toggleBuy(item) {
   });
 }
 
-/* ---------- TO PAY (Fix #5: per-person tag with uid) ---------- */
 ScreenRenderers.topay = function () {
   const items = App.toPay.slice();
   const sortKey = (x) => { if (x.paid) return 3; if (x.dueDate) return 1; return 2; };
@@ -1054,7 +1052,6 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
       
-      // Fix #5: render avatars based on stored uids
       let tagHtml = '';
       const tagUids = item.tagUids || [];
       if (tagUids.length > 0) {
@@ -1091,7 +1088,6 @@ function togglePaid(item) {
   });
 }
 
-/* ---------- HISTORY (Fix #4: delete button moved, double confirm) ---------- */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1153,7 +1149,6 @@ ScreenRenderers.history = function () {
         '</div>' +
         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>';
       
-      // Fix #4: delete button positioned top-right, double confirm
       const delBtn = document.createElement('button');
       delBtn.className = 'delete-btn';
       delBtn.textContent = '×';
@@ -1164,7 +1159,6 @@ ScreenRenderers.history = function () {
         FB.deleteDoc(FB.doc(historyCol(), r.id)).then(() => toast('History entry deleted'));
       };
       card.appendChild(delBtn);
-
       wrap.appendChild(card);
     });
   }
@@ -1198,7 +1192,6 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
   return share + myToPay - myReturn;
 }
 
-/* ---------- SAVED (Fix #6: goal accent + tag rendering) ---------- */
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -1303,7 +1296,6 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-/* ---------- SETTINGS (Fix #6, #7, #8, #9) ---------- */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1333,17 +1325,20 @@ ScreenRenderers.settings = function () {
   pg.appendChild(arow);
   wrap.appendChild(pg);
 
+  wrap.appendChild(sectionTitle('General'));
+  const gg = group();
+  gg.appendChild(rowInput('Total budget', 'set-totalbudget', s.totalBudget || 0));
+  gg.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
+  wrap.appendChild(gg);
+
   wrap.appendChild(sectionTitle('My Finances'));
   const mg = group();
   mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
 
-  // Fix #7: Budget Contribution stacked layout
   const budgetStack = document.createElement('div');
-  budgetStack.className = 'stack-row';
-  if (!salaryOk) budgetStack.style.opacity = '.55';
+  budgetStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
   budgetStack.innerHTML = '<span class="lbl">My Budget Contribution' +
-    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') +
-    '</span>';
+    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') + '</span>';
   const budgetSegWrap = document.createElement('div');
   budgetSegWrap.className = 'segmented-wrap';
   budgetSegWrap.innerHTML = '<div class="segmented" id="budget-method-seg"' +
@@ -1355,19 +1350,16 @@ ScreenRenderers.settings = function () {
   const budgetInputLine = document.createElement('div');
   budgetInputLine.className = 'input-line';
   budgetInputLine.innerHTML = '<input id="set-budget-fixed" ' +
-    (!salaryOk ? 'placeholder="Disabled" disabled' : '') +
+    (!salaryOk ? 'disabled' : '') +
     ' value="' + (us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)) + '"><span class="unit">' +
-    (us.budgetMethod === 'pct' ? '%' : App.settings?.currency || 'SEK') + '</span>';
+    (us.budgetMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>';
   budgetStack.appendChild(budgetInputLine);
   mg.appendChild(budgetStack);
 
-  // To Pay Share stacked layout
   const toPayStack = document.createElement('div');
-  toPayStack.className = 'stack-row';
-  if (!salaryOk) toPayStack.style.opacity = '.55';
+  toPayStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
   toPayStack.innerHTML = '<span class="lbl">My To Pay Share' +
-    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') +
-    '</span>';
+    (!salaryOk ? ' <span style="color:var(--red);font-size:11px;font-weight:600;margin-left:6px;">Enter salary first</span>' : '') + '</span>';
   const toPaySegWrap = document.createElement('div');
   toPaySegWrap.className = 'segmented-wrap';
   toPaySegWrap.innerHTML = '<div class="segmented" id="topay-method-seg"' +
@@ -1379,9 +1371,9 @@ ScreenRenderers.settings = function () {
   const toPayInputLine = document.createElement('div');
   toPayInputLine.className = 'input-line';
   toPayInputLine.innerHTML = '<input id="set-topay-fixed" ' +
-    (!salaryOk ? 'placeholder="Disabled" disabled' : '') +
+    (!salaryOk ? 'disabled' : '') +
     ' value="' + (us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)) + '"><span class="unit">' +
-    (us.toPayMethod === 'pct' ? '%' : App.settings?.currency || 'SEK') + '</span>';
+    (us.toPayMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>';
   toPayStack.appendChild(toPayInputLine);
   mg.appendChild(toPayStack);
 
@@ -1417,7 +1409,6 @@ ScreenRenderers.settings = function () {
   toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
   appear.appendChild(toneRow);
 
-  // Fix #8: removed pin pill row. Only sub/rep/debt remain.
   ['sub','rep','debt'].forEach(type => {
     const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill' }[type];
     const row = document.createElement('div');
@@ -1433,8 +1424,6 @@ ScreenRenderers.settings = function () {
 
   wrap.appendChild(sectionTitle('Reset'));
   const reset = group();
-  reset.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
-  
   const topayDayRow = document.createElement('div');
   topayDayRow.className = 'row';
   const dayVal = s.toPayResetDay === 'last' || s.toPayResetDay == null ? 'Last day ›' : s.toPayResetDay + 'th ›';
@@ -1449,7 +1438,6 @@ ScreenRenderers.settings = function () {
   reset.appendChild(runRow);
   wrap.appendChild(reset);
 
-  // Fix #9: Members & Ban management
   wrap.appendChild(sectionTitle('Members & Safety'));
   const memberGroup = group();
   const bannedUids = s.bannedUids || [];
@@ -1517,22 +1505,48 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
   setTimeout(() => {
-    // Wire the segmented controls
     const budgetSeg = document.getElementById('budget-method-seg');
     if (budgetSeg) budgetSeg.querySelectorAll('[data-method]').forEach(b => {
       b.onclick = () => {
         if (!salaryOk) { toast('Enter salary first'); return; }
-        updateUserSetting('budgetMethod', b.dataset.method);
-        renderScreen('settings');
+        const newMethod = b.dataset.method;
+        if (newMethod !== us.budgetMethod) {
+          if (newMethod === 'pct') {
+            const total = Number(s.totalBudget) || 0;
+            const fixed = Number(us.budgetFixed) || 0;
+            updateUserSetting('budgetPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
+          } else {
+            const total = Number(s.totalBudget) || 0;
+            const pct = Number(us.budgetPct) || 0;
+            updateUserSetting('budgetFixed', Math.round(total * pct / 100));
+          }
+          updateUserSetting('budgetMethod', newMethod);
+        }
       };
     });
     const toPaySeg = document.getElementById('topay-method-seg');
     if (toPaySeg) toPaySeg.querySelectorAll('[data-method]').forEach(b => {
       b.onclick = () => {
         if (!salaryOk) { toast('Enter salary first'); return; }
-        updateUserSetting('toPayMethod', b.dataset.method);
-        renderScreen('settings');
+        const newMethod = b.dataset.method;
+        if (newMethod !== us.toPayMethod) {
+          if (newMethod === 'pct') {
+            const total = Number(s.totalBudget) || 0;
+            const fixed = Number(us.toPayFixed) || 0;
+            updateUserSetting('toPayPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
+          } else {
+            const total = Number(s.totalBudget) || 0;
+            const pct = Number(us.toPayPct) || 0;
+            updateUserSetting('toPayFixed', Math.round(total * pct / 100));
+          }
+          updateUserSetting('toPayMethod', newMethod);
+        }
       };
+    });
+    bindInput('set-totalbudget', v => saveSetting('totalBudget', Number(v) || 0));
+    bindInput('set-startday', v => {
+      const n = parseInt(v, 10);
+      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
     });
     bindInput('set-salary', v => updateUserSetting('salary', Number(v) || 0));
     bindInput('set-budget-fixed', v => {
@@ -1544,10 +1558,6 @@ ScreenRenderers.settings = function () {
       if (!salaryOk) { toast('Enter salary first'); return; }
       if (us.toPayMethod === 'pct') updateUserSetting('toPayPct', Number(v) || 0);
       else updateUserSetting('toPayFixed', Number(v) || 0);
-    });
-    bindInput('set-startday', v => {
-      const n = parseInt(v, 10);
-      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
     });
   }, 0);
   return wrap;
@@ -1600,7 +1610,6 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- BAN / CLEAR BANNED (Fix #9) ---------- */
 function confirmBanMember(uid, m) {
   const name = m.name || m.email || uid;
   if (!confirm('Ban "' + name + '"?\n\nThey will be signed out on their next app load and blocked from returning.')) return;
@@ -1620,7 +1629,6 @@ function confirmClearBanned() {
   FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
-/* ---------- PROFILE ---------- */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -1717,9 +1725,8 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- GOAL EDITOR (Fix #2, #6: layout 3 + per-person monthly) ---------- */
 function openGoalEditor() {
-  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tagUids: [] };
+  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tagUids: [], monthlySplit: {} };
   showGoalSheet(g, true);
 }
 function openGoalSheet(g) {
@@ -1768,7 +1775,6 @@ function showGoalSheet(g, isNew) {
     const dInp = dateRow.querySelector('#g-date');
     dInp.addEventListener('input', () => autoSlashDate(dInp));
 
-    // Accent color — Fix #6: applies on click
     const colorRow = document.createElement('div');
     colorRow.className = 'v4-row';
     colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" id="g-swatch" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
@@ -1778,23 +1784,21 @@ function showGoalSheet(g, isNew) {
         const sw = document.getElementById('g-swatch');
         if (sw) {
           sw.className = 'swatch c-' + newKey;
-          sw.style.background = ''; // reset inline so class takes over
+          sw.style.background = '';
         }
         if (!isNew) FB.updateDoc(FB.doc(goalsCol(), g.id), { colorKey: newKey });
       });
     };
     body.appendChild(colorRow);
 
-    // Who is this for? (multi-select)
     let currentTagUids = Array.isArray(g.tagUids) ? g.tagUids.slice() : [];
     const members = Object.keys(App.settings?.members || {});
     const memberList = members.map(uid => ({
       uid,
-      name: (App.settings.members[uid].name || App.settings.members[uid].email || uid),
+      name: displayName(uid),
       isMe: uid === App.user.uid,
     }));
 
-    // Per-person monthly split
     let perPerson = {};
     memberList.forEach(m => { perPerson[m.uid] = 0; });
     if (g.monthlySplit) Object.assign(perPerson, g.monthlySplit);
@@ -1804,7 +1808,6 @@ function showGoalSheet(g, isNew) {
       if (!container) return;
       container.innerHTML = '';
       
-      // Total row
       const activeMembers = memberList.filter(m => currentTagUids.includes(m.uid));
       if (activeMembers.length === 0) return;
       
@@ -1818,7 +1821,7 @@ function showGoalSheet(g, isNew) {
         const row = document.createElement('div');
         row.className = 'gsplit-row';
         row.innerHTML = getAvatarHtml(m.uid, '28px') +
-          '<div class="label">' + esc(m.isMe ? 'You' : m.name) + '</div>' +
+          '<div class="label">' + esc(m.name) + '</div>' +
           '<div class="chip"><input type="number" data-uid="' + m.uid + '" value="' + amt + '"><span class="u">/ mo</span></div>';
         list.appendChild(row);
       });
@@ -1830,7 +1833,6 @@ function showGoalSheet(g, isNew) {
       
       container.appendChild(list);
       
-      // Wire inputs
       list.querySelectorAll('input[data-uid]').forEach(inp => {
         inp.addEventListener('input', () => {
           perPerson[inp.dataset.uid] = Number(inp.value) || 0;
@@ -1852,7 +1854,7 @@ function showGoalSheet(g, isNew) {
     
     memberList.forEach(m => {
       const b = document.createElement('button');
-      b.textContent = m.isMe ? 'Me' : m.name;
+      b.textContent = m.name;
       b.style.flex = '1';
       if (currentTagUids.includes(m.uid)) b.className = 'active';
       b.onclick = () => {
@@ -1931,7 +1933,6 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* ---------- CATEGORY EDITOR ---------- */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
@@ -2052,7 +2053,6 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* ---------- COLOR PICKERS ---------- */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -2105,7 +2105,6 @@ function openPillColorPicker(type) {
   });
 }
 
-/* ---------- ICON PICKER ---------- */
 const ICONS = {
   'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
   'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
@@ -2191,7 +2190,6 @@ function buildIconPickerInline(current, onPick) {
   });
 }
 
-/* ---------- TONE PICKER ---------- */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -2239,7 +2237,6 @@ function openTonePicker(currentKey) {
   });
 }
 
-/* ---------- EXPENSE EDITOR ---------- */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2315,7 +2312,6 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ---------- TO PAY EDITOR (Fix #5: tagUids + joint per-person amounts) ---------- */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
@@ -2330,7 +2326,7 @@ function openToPayEditor(item) {
   const members = Object.keys(App.settings?.members || {});
   const memberList = members.map(uid => ({
     uid,
-    name: (App.settings.members[uid].name || App.settings.members[uid].email || uid),
+    name: displayName(uid),
     isMe: uid === App.user.uid,
   }));
 
@@ -2375,377 +2371,4 @@ function openToPayEditor(item) {
     body.appendChild(typeF);
 
     const repeatEndF = document.createElement('div');
-    repeatEndF.className = 'field';
-    repeatEndF.style.display = (type === 'repeat' || type === 'debt') ? 'flex' : 'none';
-    repeatEndF.innerHTML = '<label>Repeat until</label><input class="date-input" id="tp-repeat-end" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(item.repeatUntil) + '">';
-    body.appendChild(repeatEndF);
-    repeatEndF.querySelector('#tp-repeat-end').addEventListener('input', (e) => autoSlashDate(e.target));
-
-    // Who pays — multi-select
-    const whoRow = document.createElement('div');
-    whoRow.className = 'field';
-    whoRow.style.flexDirection = 'column';
-    whoRow.style.alignItems = 'flex-start';
-    whoRow.innerHTML = '<label style="margin-bottom:8px;">Who pays?</label>';
-    const whoSeg = document.createElement('div');
-    whoSeg.className = 'segmented';
-    whoSeg.style.width = '100%';
-    whoSeg.style.flexWrap = 'wrap';
-    whoSeg.style.gap = '2px';
-    
-    memberList.forEach(m => {
-      const b = document.createElement('button');
-      b.textContent = m.isMe ? 'Me' : m.name;
-      b.style.flex = '1';
-      if (currentTagUids.includes(m.uid)) b.className = 'active';
-      b.onclick = () => {
-        if (currentTagUids.includes(m.uid)) {
-          currentTagUids = currentTagUids.filter(u => u !== m.uid);
-          b.classList.remove('active');
-        } else {
-          currentTagUids.push(m.uid);
-          b.classList.add('active');
-        }
-        renderAmounts();
-      };
-      whoSeg.appendChild(b);
-    });
-    whoRow.appendChild(whoSeg);
-    body.appendChild(whoRow);
-
-    // Amounts per person (only if more than one person tagged)
-    const amountsContainer = document.createElement('div');
-    amountsContainer.id = 'tp-amounts-container';
-    body.appendChild(amountsContainer);
-
-    function renderAmounts() {
-      amountsContainer.innerHTML = '';
-      if (currentTagUids.length <= 1) return;
-      
-      const activeMembers = memberList.filter(m => currentTagUids.includes(m.uid));
-      const list = document.createElement('div');
-      list.className = 'gsplits';
-      
-      let total = 0;
-      activeMembers.forEach(m => {
-        const amt = Number(amountsByUid[m.uid]) || 0;
-        total += amt;
-        const row = document.createElement('div');
-        row.className = 'gsplit-row';
-        row.innerHTML = getAvatarHtml(m.uid, '28px') +
-          '<div class="label">' + esc(m.isMe ? 'You' : m.name) + '</div>' +
-          '<div class="chip"><input type="number" data-uid="' + m.uid + '" value="' + amt + '"><span class="u">' + esc(App.settings?.currency || 'SEK') + '</span></div>';
-        list.appendChild(row);
-      });
-      
-      const totalAmount = Number(document.getElementById('tp-amt')?.value) || 0;
-      const foot = document.createElement('div');
-      foot.className = 'gsplit-foot';
-      const match = Math.abs(total - totalAmount) < 0.01;
-      foot.style.color = match ? '' : 'var(--red)';
-      foot.innerHTML = '<span>Split total</span><span>' + fmtAmount(total) + (match ? '' : ' (≠ ' + fmtAmount(totalAmount) + ')') + '</span>';
-      list.appendChild(foot);
-      
-      amountsContainer.appendChild(list);
-      
-      list.querySelectorAll('input[data-uid]').forEach(inp => {
-        inp.addEventListener('input', () => {
-          amountsByUid[inp.dataset.uid] = Number(inp.value) || 0;
-          renderAmounts();
-        });
-      });
-    }
-    renderAmounts();
-
-    footer.innerHTML = '';
-    const save = document.createElement('button');
-    save.className = 'primary';
-    save.textContent = isNew ? 'Add' : 'Save';
-    save.onclick = async () => {
-      const name = document.getElementById('tp-name').value.trim();
-      if (!name) { toast('Name required'); return; }
-      const amtVal = document.getElementById('tp-amt').value.trim();
-      const amount = amtVal === '' ? null : Number(amtVal);
-      if (amount !== null && (isNaN(amount) || amount < 0)) { toast('Invalid amount'); return; }
-      const dueStr = document.getElementById('tp-due').value;
-      const dueISO = dueStr ? ddmmyyyyToISO(dueStr) : '';
-      if ((type === 'subscription' || type === 'repeat' || type === 'debt') && !dueISO) { toast('Recurring items need a valid due date'); return; }
-      if (dueStr && !dueISO) { toast('Invalid date — use DD/MM/YYYY'); return; }
-      if (currentTagUids.length === 0) { toast('Pick at least one person'); return; }
-      
-      // If multiple people are tagged, validate the split amounts match the total
-      if (currentTagUids.length > 1 && amount != null) {
-        const splitTotal = currentTagUids.reduce((a, uid) => a + (Number(amountsByUid[uid]) || 0), 0);
-        if (Math.abs(splitTotal - amount) > 0.01) {
-          toast('Split total (' + fmtAmount(splitTotal) + ') does not match total amount (' + fmtAmount(amount) + ')');
-          return;
-        }
-      } else {
-        // Single person → give them the full amount
-        currentTagUids.forEach(uid => { amountsByUid[uid] = amount || 0; });
-      }
-      
-      let repeatUntilISO = '';
-      if (type === 'repeat' || type === 'debt') {
-        const repStr = document.getElementById('tp-repeat-end').value;
-        repeatUntilISO = repStr ? ddmmyyyyToISO(repStr) : '';
-        if (!repeatUntilISO) { toast('Repeat needs a valid end date'); return; }
-      }
-
-      const data = {
-        name, amount, dueDate: dueISO,
-        isSubscription: type === 'subscription',
-        isRepeat: type === 'repeat',
-        isDebt: type === 'debt',
-        repeatUntil: repeatUntilISO || '',
-        tagUids: currentTagUids,
-        amountsByUid: { ...amountsByUid },
-      };
-      closeSheet();
-      if (isNew) await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
-    };
-    footer.appendChild(save);
-
-    if (!isNew) {
-      const del = h('button', { class: 'danger' }, 'Delete');
-      del.onclick = async () => {
-        if (!confirm('Delete "' + item.name + '"?')) return;
-        closeSheet();
-        await FB.deleteDoc(FB.doc(toPayCol(), item.id));
-      };
-      footer.appendChild(del);
-    }
-  });
-}
-
-/* ---------- HISTORY HELPERS ---------- */
-async function syncCurrentHistoryBudget(settingsOverride) {
-  const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
-  const period = computeCurrentPeriod(s.periodStartDay);
-  const budgetNow = Number(s.totalBudget) || 0;
-  const ref = FB.doc(historyCol(), period.key);
-  try {
-    const snap = await FB.getDoc(ref);
-    if (!snap.exists()) {
-      await FB.setDoc(ref, { periodKey: period.key, periodLabel: period.label, budgetSnapshot: budgetNow, totalSpent: 0 });
-    } else {
-      const data = snap.data();
-      if (data.budgetSnapshot !== budgetNow || data.periodLabel !== period.label) {
-        await FB.updateDoc(ref, { periodLabel: period.label, budgetSnapshot: budgetNow });
-      }
-    }
-    await recomputeHistoryTotal(period.key);
-  } catch (e) { console.error('syncCurrentHistoryBudget:', e); }
-}
-async function recomputeHistoryTotal(periodKey) {
-  if (!periodKey) return;
-  const q = FB.query(expensesCol(), FB.where('periodKey', '==', periodKey));
-  const snap = await FB.getDocs(q);
-  const total = snap.docs.reduce((a, d) => a + Number(d.data().amount || 0), 0);
-  const ref = FB.doc(historyCol(), periodKey);
-  const hs = await FB.getDoc(ref);
-  if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
-}
-
-/* ---------- PERIODS ---------- */
-function computeCurrentPeriod(startDay) {
-  startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-  let sYear = y, sMonth = m;
-  if (d < startDay) { const prev = new Date(y, m - 1, 1); sYear = prev.getFullYear(); sMonth = prev.getMonth(); }
-  const startDate = clampDay(sYear, sMonth, startDay);
-  const nextStart = clampDay(sYear, sMonth + 1, startDay);
-  const endDate = new Date(nextStart); endDate.setDate(endDate.getDate() - 1);
-  const key = pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1);
-  const label = formatPeriodLabel(startDate, endDate);
-  const msPerDay = 86400000;
-  const daysTotal = Math.round((endDate - startDate) / msPerDay) + 1;
-  const todayMidnight = new Date(y, m, d);
-  const daysLeft = Math.max(0, Math.round((endDate - todayMidnight) / msPerDay));
-  return { key, year: startDate.getFullYear(), start: startDate.toISOString(), end: endDate.toISOString(), label, daysTotal, daysLeft };
-}
-function computePreviousPeriod(currentPeriod) {
-  const d = parseLocalDate(currentPeriod.start);
-  const prevStart = addOneMonth(d); prevStart.setMonth(prevStart.getMonth() - 2);
-  return computeCurrentPeriodForDate(prevStart, App.settings.periodStartDay);
-}
-function computeCurrentPeriodForDate(date, startDay) {
-  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
-  let sYear = y, sMonth = m;
-  if (d < startDay) { const prev = new Date(y, m - 1, 1); sYear = prev.getFullYear(); sMonth = prev.getMonth(); }
-  const startDate = clampDay(sYear, sMonth, startDay);
-  const nextStart = clampDay(sYear, sMonth + 1, startDay);
-  const endDate = new Date(nextStart); endDate.setDate(endDate.getDate() - 1);
-  return { key: pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1), label: formatPeriodLabel(startDate, endDate) };
-}
-function clampDay(year, month0, day) {
-  const lastDay = new Date(year, month0 + 1, 0).getDate();
-  return new Date(year, month0, Math.min(day, lastDay));
-}
-function formatPeriodLabel(start, end) {
-  const sameYear = start.getFullYear() === end.getFullYear();
-  const s = start.getDate() + ' ' + MONTHS_SHORT[start.getMonth()] + (sameYear ? '' : ' ' + start.getFullYear());
-  const e = end.getDate() + ' ' + MONTHS_SHORT[end.getMonth()] + ' ' + end.getFullYear();
-  return s + ' – ' + e;
-}
-function labelForDay(iso) {
-  if (iso === 'unknown') return 'Unknown date';
-  const d = new Date(iso + 'T00:00:00');
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const diff = Math.round((today - d) / 86400000);
-  const full = d.getDate() + ' ' + MONTHS_SHORT[d.getMonth()] + ' ' + d.getFullYear();
-  if (diff === 0) return 'Today · ' + full;
-  if (diff === 1) return 'Yesterday · ' + full;
-  return full;
-}
-
-/* ---------- RESET DAY PICKER ---------- */
-function openResetDayPicker() {
-  const s = App.settings || DEFAULT_SETTINGS;
-  let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>To Pay reset day</h3>';
-    const info = document.createElement('div');
-    info.className = 'hint';
-    info.style.marginBottom = '12px';
-    info.textContent = 'When subscriptions and repeats roll forward to next month.';
-    body.appendChild(info);
-
-    const lastRow = document.createElement('div');
-    lastRow.className = 'field';
-    lastRow.style.cursor = 'pointer';
-    lastRow.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
-        '<div class="radio" data-radio="last" style="width:20px;height:20px;border-radius:10px;border:2px solid var(--blue);display:flex;align-items:center;justify-content:center;color:var(--blue);font-weight:800;font-size:12px;">' + (mode === 'last' ? '✓' : '') + '</div>' +
-        '<span style="font-weight:600;">Last day of month</span></div>';
-    body.appendChild(lastRow);
-
-    const specRow = document.createElement('div');
-    specRow.className = 'field';
-    specRow.style.cursor = 'pointer';
-    specRow.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
-        '<div class="radio" data-radio="specific" style="width:20px;height:20px;border-radius:10px;border:2px solid var(--blue);display:flex;align-items:center;justify-content:center;color:var(--blue);font-weight:800;font-size:12px;">' + (mode === 'specific' ? '✓' : '') + '</div>' +
-        '<span style="font-weight:600;">Specific day</span></div>' +
-      '<input id="rs-day" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="' + (mode === 'specific' ? Number(s.toPayResetDay) : '') + '" placeholder="25" style="width:56px;text-align:right;background:transparent;border:none;outline:none;font-size:16px;font-weight:600;color:var(--text);">';
-    body.appendChild(specRow);
-
-    const setMode = (m) => {
-      mode = m;
-      body.querySelectorAll('[data-radio]').forEach(r => { r.textContent = (r.dataset.radio === m) ? '✓' : ''; });
-      if (m === 'specific') setTimeout(() => document.getElementById('rs-day')?.focus(), 20);
-    };
-    lastRow.onclick = () => setMode('last');
-    specRow.onclick = (ev) => { if (ev.target.id !== 'rs-day') setMode('specific'); };
-
-    footer.innerHTML = '';
-    const save = document.createElement('button');
-    save.className = 'primary';
-    save.textContent = 'Save';
-    save.onclick = async () => {
-      if (mode === 'last') await saveSetting('toPayResetDay', 'last');
-      else {
-        const inp = document.getElementById('rs-day');
-        const n = parseInt((inp.value || '').replace(/\D/g, ''), 10);
-        if (isNaN(n) || n < 1 || n > 31) { toast('Enter a day 1–31'); return; }
-        await saveSetting('toPayResetDay', n);
-      }
-      closeSheet();
-      toast('Reset day saved');
-    };
-    footer.appendChild(save);
-  });
-}
-
-function confirmRunReset() {
-  const ok = confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.');
-  if (!ok) return;
-  runToPayReset().then(() => toast('To Pay reset ran'));
-}
-async function runToPayReset() {
-  const today = new Date();
-  const todayY = today.getFullYear();
-  const todayM = today.getMonth();
-  const ops = [];
-  for (const item of App.toPay) {
-    const due = item.dueDate ? parseLocalDate(item.dueDate) : null;
-    const isFutureMonth = due && (due.getFullYear() > todayY || (due.getFullYear() === todayY && due.getMonth() > todayM));
-    if (isFutureMonth) continue;
-    if (item.isSubscription) {
-      const base = due || today;
-      const next = addOneMonth(base);
-      ops.push({ t: 'update', id: item.id, data: { dueDate: localDateString(next), paid: false, paidDate: null } });
-    } else if (item.isRepeat || item.isDebt) {
-      const base = due || today;
-      const next = addOneMonth(base);
-      const until = item.repeatUntil ? parseLocalDate(item.repeatUntil) : null;
-      if (until && next > until) ops.push({ t: 'delete', id: item.id });
-      else ops.push({ t: 'update', id: item.id, data: { dueDate: localDateString(next), paid: false, paidDate: null } });
-    } else {
-      ops.push({ t: 'delete', id: item.id });
-    }
-  }
-  for (const op of ops) {
-    try {
-      if (op.t === 'update') await FB.updateDoc(FB.doc(toPayCol(), op.id), op.data);
-      else await FB.deleteDoc(FB.doc(toPayCol(), op.id));
-    } catch (e) { console.error('reset op failed:', op, e); }
-  }
-}
-async function maybeAutoReset() {
-  if (!App.settings) return;
-  const resetDay = App.settings.toPayResetDay || 'last';
-  const today = new Date();
-  let resetDate;
-  if (resetDay === 'last') {
-    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    if (today >= lastDay) resetDate = lastDay;
-    else resetDate = new Date(today.getFullYear(), today.getMonth(), 0);
-  } else {
-    const d = Math.min(31, Math.max(1, Number(resetDay) || 25));
-    const dim = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const candidate = new Date(today.getFullYear(), today.getMonth(), Math.min(d, dim));
-    if (today >= candidate) resetDate = candidate;
-    else {
-      const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const dimLm = new Date(lm.getFullYear(), lm.getMonth() + 1, 0).getDate();
-      resetDate = new Date(lm.getFullYear(), lm.getMonth(), Math.min(d, dimLm));
-    }
-  }
-  const resetKey = resetDate.getFullYear() + '-' + pad2(resetDate.getMonth() + 1);
-  if (App.settings.lastResetKey === resetKey) return;
-  await runToPayReset();
-  await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
-}
-
-/* ---------- AUTO-CLEANUP ---------- */
-async function cleanupOldExpenses() {
-  const currentKey = computeCurrentPeriod(App.settings.periodStartDay).key;
-  const oldExpenses = App.expenses.filter(e => e.periodKey && e.periodKey < currentKey);
-  if (oldExpenses.length === 0) return;
-  for (const e of oldExpenses) await FB.deleteDoc(FB.doc(expensesCol(), e.id));
-}
-
-/* ---------- FAB ---------- */
-document.getElementById('fab').addEventListener('click', () => {
-  if (App.screen === 'home') openExpenseEditor(null);
-  else if (App.screen === 'topay') openToPayEditor(null);
-});
-
-/* ---------- AUTO-CLEAR INPUTS ---------- */
-document.addEventListener('focusin', (e) => {
-  if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
-    if (!e.target.dataset.original && e.target.value) {
-      e.target.dataset.original = e.target.value;
-      e.target.value = '';
-    }
-  }
-});
-document.addEventListener('focusout', (e) => {
-  if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
-    if (e.target.value.trim() === '' && e.target.dataset.original) {
-      e.target.value = e.target.dataset.original;
-    }
-    delete e.target.dataset.original;
-  }
-});
+    repeat
