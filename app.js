@@ -1,4 +1,4 @@
-/* app.js — full app logic. */
+/* app.js — full app logic (rewritten for all 12 fixes). */
 
 const FB = window.FB;
 const BUDGET_ID = 'shared';
@@ -15,9 +15,9 @@ const DEFAULT_SETTINGS = {
   appName: 'Our Budget', currency: 'SEK', totalBudget: 12000,
   periodStartDay: 25, toPayResetDay: 'last',
   timezone: 'Europe/Stockholm',
-  members: {}, lastResetKey: null,
-  pillColors: { sub: 'blue', rep: 'purple', debt: 'red', pin: 'red' },
-  buyLists: [{ id: 'default', name: 'General' }]
+  members: {}, lastResetKey: null, owners: [], bannedUids: [],
+  pillColors: { sub: 'blue', rep: 'purple', debt: 'red' },   // NO pin
+  buyLists: [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }]
 };
 
 const DEFAULT_USER_SETTINGS = {
@@ -29,12 +29,12 @@ const DEFAULT_USER_SETTINGS = {
 };
 
 const SEED_CATEGORIES = [
-  { name: 'Groceries',     icon: '🛒', limit: 5000, colorKey: 'green',  parentId: '', pinOrder: 0 },
-  { name: 'Transport',     icon: '🚌', limit: 1500, colorKey: 'blue',   parentId: '', pinOrder: 0 },
-  { name: 'Dining out',    icon: '🍽️', limit: 1000, colorKey: 'red',    parentId: '', pinOrder: 0 },
-  { name: 'Utilities',     icon: '💡', limit: 2000, colorKey: 'amber',  parentId: '', pinOrder: 0 },
-  { name: 'Entertainment', icon: '🎬', limit: 1500, colorKey: 'purple', parentId: '', pinOrder: 0 },
-  { name: 'Health',        icon: '💊', limit: 1000, colorKey: 'teal',   parentId: '', pinOrder: 0 },
+  { name: 'Groceries',     icon: '🛒', limit: 5000, colorKey: 'green',  parentId: '' },
+  { name: 'Transport',     icon: '🚌', limit: 1500, colorKey: 'blue',   parentId: '' },
+  { name: 'Dining out',    icon: '🍽️', limit: 1000, colorKey: 'red',    parentId: '' },
+  { name: 'Utilities',     icon: '💡', limit: 2000, colorKey: 'amber',  parentId: '' },
+  { name: 'Entertainment', icon: '🎬', limit: 1500, colorKey: 'purple', parentId: '' },
+  { name: 'Health',        icon: '💊', limit: 1000, colorKey: 'teal',   parentId: '' },
 ];
 
 const TABS = [
@@ -50,46 +50,101 @@ const TABS = [
 const SCREENS = TABS.map(t => t.id);
 const ScreenRenderers = {};
 
-FB.onAuthStateChanged(FB.auth, async (user) => {
-  if (user) {
-    App.user = user;
-    document.getElementById('login-screen').hidden = true;
-    await startApp();
+/* ============================================================
+   BOOT — wrap all top-level DOM work in DOMContentLoaded
+   ============================================================ */
+function ready(fn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fn, { once: true });
   } else {
-    signedOut();
+    fn();
   }
-});
+}
 
-document.getElementById('forgot-pw-btn').addEventListener('click', async () => {
-  const email = document.getElementById('login-email').value.trim();
-  if (!email) return showLoginError('Enter your email first, then click Forgot Password.');
-  try {
-    await FB.sendPasswordResetEmail(FB.auth, email);
-    toast('Reset link sent to ' + email);
-    hideLoginError();
-  } catch (err) { showLoginError(err.message); }
-});
-
-let googleBusy = false;
-const googleBtn = document.getElementById('google-signin');
-if (googleBtn) {
-  googleBtn.addEventListener('click', async () => {
-    if (googleBusy) return;
-    googleBusy = true;
-    googleBtn.disabled = true;
-    try {
-      await FB.signInWithPopup(FB.auth, new FB.GoogleAuthProvider());
-    } catch (err) { authError(err); }
-    finally { googleBusy = false; googleBtn.disabled = false; }
+ready(() => {
+  FB.onAuthStateChanged(FB.auth, async (user) => {
+    if (user) {
+      App.user = user;
+      const loginEl = document.getElementById('login-screen');
+      if (loginEl) loginEl.hidden = true;
+      await startApp();
+    } else {
+      signedOut();
+    }
   });
-}
 
-function loginFields() {
-  return {
-    email: document.getElementById('login-email').value.trim(),
-    password: document.getElementById('login-password').value,
-  };
-}
+  const forgotBtn = document.getElementById('forgot-pw-btn');
+  if (forgotBtn) {
+    forgotBtn.addEventListener('click', async () => {
+      const email = document.getElementById('login-email').value.trim();
+      if (!email) return showLoginError('Enter your email first, then click Forgot Password.');
+      try {
+        await FB.sendPasswordResetEmail(FB.auth, email);
+        toast('Reset link sent to ' + email);
+        hideLoginError();
+      } catch (err) { showLoginError(err.message); }
+    });
+  }
+
+  let googleBusy = false;
+  const googleBtn = document.getElementById('google-signin');
+  if (googleBtn) {
+    googleBtn.addEventListener('click', async () => {
+      if (googleBusy) return;
+      googleBusy = true;
+      googleBtn.disabled = true;
+      try {
+        await FB.signInWithPopup(FB.auth, new FB.GoogleAuthProvider());
+      } catch (err) { authError(err); }
+      finally { googleBusy = false; googleBtn.disabled = false; }
+    });
+  }
+
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) loginBtn.addEventListener('click', async () => {
+    hideLoginError();
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!email || !password) return showLoginError('Enter email and password.');
+    try {
+      await FB.signInWithEmailAndPassword(FB.auth, email, password);
+    } catch (err) {
+      const c = err.code || '';
+      if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found','auth/invalid-login-credentials'].includes(c))
+        showLoginError('Wrong email or password.');
+      else if (c === 'auth/too-many-requests') showLoginError('Too many attempts — try later.');
+      else if (c === 'auth/network-request-failed') showLoginError('Network error.');
+      else if (c === 'auth/operation-not-allowed') showLoginError('Enable Email/Password in Firebase.');
+      else showLoginError(err.message);
+    }
+  });
+
+  const signupBtn = document.getElementById('signup-btn');
+  if (signupBtn) signupBtn.addEventListener('click', async () => {
+    hideLoginError();
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!email || !password) return showLoginError('Enter email and password.');
+    if (password.length < 6) return showLoginError('Password must be at least 6 characters.');
+    try {
+      await FB.createUserWithEmailAndPassword(FB.auth, email, password);
+    } catch (err) {
+      const c = err.code || '';
+      if (c === 'auth/email-already-in-use') showLoginError('Account exists — tap "Sign in".');
+      else if (c === 'auth/invalid-email') showLoginError('Email is not valid.');
+      else if (c === 'auth/weak-password') showLoginError('Password too weak.');
+      else if (c === 'auth/operation-not-allowed') showLoginError('Enable Email/Password in Firebase.');
+      else showLoginError(err.message);
+    }
+  });
+
+  const fab = document.getElementById('fab');
+  if (fab) fab.addEventListener('click', () => {
+    if (App.screen === 'home') openExpenseEditor(null);
+    else if (App.screen === 'topay') openToPayEditor(null);
+  });
+});
+
 function showLoginError(msg) {
   const el = document.getElementById('login-error');
   if (!el) return;
@@ -111,56 +166,27 @@ function authError(err) {
   else toast('Sign-in failed: ' + (err.message || err));
 }
 
-const loginBtn = document.getElementById('login-btn');
-if (loginBtn) loginBtn.addEventListener('click', async () => {
-  hideLoginError();
-  const { email, password } = loginFields();
-  if (!email || !password) return showLoginError('Enter email and password.');
-  try {
-    await FB.signInWithEmailAndPassword(FB.auth, email, password);
-  } catch (err) {
-    const c = err.code || '';
-    if (['auth/invalid-credential','auth/wrong-password','auth/user-not-found','auth/invalid-login-credentials'].includes(c))
-      showLoginError('Wrong email or password.');
-    else if (c === 'auth/too-many-requests') showLoginError('Too many attempts — try later.');
-    else if (c === 'auth/network-request-failed') showLoginError('Network error.');
-    else if (c === 'auth/operation-not-allowed') showLoginError('Enable Email/Password in Firebase.');
-    else showLoginError(err.message);
-  }
-});
-
-const signupBtn = document.getElementById('signup-btn');
-if (signupBtn) signupBtn.addEventListener('click', async () => {
-  hideLoginError();
-  const { email, password } = loginFields();
-  if (!email || !password) return showLoginError('Enter email and password.');
-  if (password.length < 6) return showLoginError('Password must be at least 6 characters.');
-  try {
-    await FB.createUserWithEmailAndPassword(FB.auth, email, password);
-  } catch (err) {
-    const c = err.code || '';
-    if (c === 'auth/email-already-in-use') showLoginError('Account exists — tap "Sign in".');
-    else if (c === 'auth/invalid-email') showLoginError('Email is not valid.');
-    else if (c === 'auth/weak-password') showLoginError('Password too weak.');
-    else if (c === 'auth/operation-not-allowed') showLoginError('Enable Email/Password in Firebase.');
-    else showLoginError(err.message);
-  }
-});
-
 function signedOut() {
   detachListeners();
   App.user = null; App.settings = null; App.userSettings = null; App.settingsLoaded = false;
   App.categories = []; App.expenses = []; App.toPay = []; App.buy = []; App.history = []; App.goals = [];
   App.screen = 'home'; App.historyYear = null; App.activeBuyList = 'default';
-  document.getElementById('screens').innerHTML = '';
-  document.getElementById('tabbar').innerHTML = '';
-  document.getElementById('login-screen').hidden = false;
-  document.getElementById('loading').classList.add('hidden');
+  const screensEl = document.getElementById('screens');
+  if (screensEl) screensEl.innerHTML = '';
+  const tabbarEl = document.getElementById('tabbar');
+  if (tabbarEl) tabbarEl.innerHTML = '';
+  const loginEl = document.getElementById('login-screen');
+  if (loginEl) loginEl.hidden = false;
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.classList.add('hidden');
   const fab = document.getElementById('fab');
   if (fab) fab.classList.remove('show');
   closeSheet();
 }
 
+/* ============================================================
+   FIRESTORE REFS
+   ============================================================ */
 const budgetDoc     = () => FB.doc(FB.db, 'budgets', BUDGET_ID);
 const categoriesCol = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'categories');
 const expensesCol   = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'expenses');
@@ -169,18 +195,43 @@ const buyCol        = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'buy');
 const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history');
 const goalsCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'goals');
 
+/* ============================================================
+   BOOT
+   ============================================================ */
 async function startApp() {
   detachListeners();
   try {
     const snap = await FB.getDoc(budgetDoc());
     if (!snap.exists()) {
-      await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
-      App.settings = DEFAULT_SETTINGS;
+      await FB.setDoc(budgetDoc(), { ...DEFAULT_SETTINGS, owners: [App.user.uid] });
+      App.settings = { ...DEFAULT_SETTINGS, owners: [App.user.uid] };
     } else {
       App.settings = snap.data();
-      if (!App.settings.buyLists) {
-        await FB.updateDoc(budgetDoc(), { buyLists: DEFAULT_SETTINGS.buyLists });
-        App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
+      const updates = {};
+      if (!App.settings.buyLists) updates.buyLists = DEFAULT_SETTINGS.buyLists;
+      if (!App.settings.owners) updates.owners = [App.user.uid];
+      if (!App.settings.bannedUids) updates.bannedUids = [];
+      if (!App.settings.pillColors) updates.pillColors = DEFAULT_SETTINGS.pillColors;
+      // Migrate buyLists: ensure every entry has icon + colorKey
+      if (App.settings.buyLists) {
+        const migrated = App.settings.buyLists.map(l => ({
+          id: l.id,
+          name: l.name,
+          colorKey: l.colorKey || 'blue',
+          icon: l.icon || '🛒'
+        }));
+        if (JSON.stringify(migrated) !== JSON.stringify(App.settings.buyLists)) {
+          updates.buyLists = migrated;
+        }
+      }
+      if (Object.keys(updates).length) {
+        await FB.updateDoc(budgetDoc(), updates);
+        Object.assign(App.settings, updates);
+      }
+      if ((App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed from this household.');
+        await FB.signOut(FB.auth);
+        return;
       }
     }
   } catch (e) { console.error('budget doc:', e); }
@@ -204,8 +255,8 @@ async function startApp() {
   mountScreens();
   renderTabbar();
   goScreen('home');
-  document.getElementById('loading').classList.add('hidden');
-  cleanupOldExpenses();
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.classList.add('hidden');
 }
 
 async function registerMember() {
@@ -233,24 +284,17 @@ async function migrateUserSettings() {
   const uid = App.user.uid;
   const members = App.settings.members || {};
   const me = members[uid] || {};
-  let migrated = false;
   const updates = {};
-
-  if (!me.theme) { updates[`members.${uid}.theme`] = 'system'; migrated = true; }
-  if (!me.heroTone) { updates[`members.${uid}.heroTone`] = 'forest'; migrated = true; }
-  if (!me.pins) {
-    try {
-      const catsSnap = await FB.getDocs(categoriesCol());
-      updates[`members.${uid}.pins`] = catsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(c => Number(c.pinOrder) > 0)
-        .sort((a, b) => Number(a.pinOrder) - Number(b.pinOrder))
-        .map(c => c.id);
-      migrated = true;
-    } catch(e) {}
-  }
-  if (migrated) await FB.updateDoc(budgetDoc(), updates);
+  let changed = false;
+  if (!me.theme)     { updates[`members.${uid}.theme`] = 'system';   changed = true; }
+  if (!me.heroTone)  { updates[`members.${uid}.heroTone`] = 'forest'; changed = true; }
+  if (!me.pins)      { updates[`members.${uid}.pins`] = [];           changed = true; }
+  if (changed) await FB.updateDoc(budgetDoc(), updates);
 }
 
+/* ============================================================
+   LISTENERS
+   ============================================================ */
 function attachListeners() {
   const fail = (n) => (e) => console.error('listener ' + n + ':', e);
 
@@ -263,6 +307,11 @@ function attachListeners() {
       } else {
         App.userSettings = DEFAULT_USER_SETTINGS;
       }
+      if (App.user && (App.settings.bannedUids || []).includes(App.user.uid)) {
+        toast('You have been removed.');
+        FB.signOut(FB.auth);
+        return;
+      }
       applyThemeAndTone();
       applyPillColors();
       if (!App.settingsLoaded) {
@@ -270,7 +319,10 @@ function attachListeners() {
         maybeAutoReset();
         syncCurrentHistoryBudget();
       }
-      if (['home','categories','settings','saved'].includes(App.screen)) renderScreen(App.screen);
+      // Members change (name/avatar/prefs) → re-render screens that show avatars
+      if (['home','categories','settings','saved','buy','topay','history'].includes(App.screen)) {
+        renderScreen(App.screen);
+      }
     }
   }, fail('settings')));
 
@@ -321,6 +373,9 @@ function detachListeners() {
   App.listeners = [];
 }
 
+/* ============================================================
+   DATES / FORMAT
+   ============================================================ */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -346,7 +401,6 @@ function addOneMonth(baseDate) {
   const clampedDay = Math.min(d.getDate(), lastDay);
   return new Date(targetYear, actualMonth, clampedDay);
 }
-
 function fmtAmount(n, withCurrency) {
   const num = Math.round(Number(n) || 0);
   const s = String(num).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -365,7 +419,6 @@ function daysUntil(iso) {
   const t = new Date(); t.setHours(0,0,0,0);
   return Math.round((d - t) / 86400000);
 }
-
 function ddmmyyyyToISO(str) {
   if (!str) return '';
   const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(str.trim());
@@ -393,6 +446,9 @@ function autoSlashDate(el) {
   el.value = out;
 }
 
+/* ============================================================
+   UTILS
+   ============================================================ */
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -419,14 +475,32 @@ function svgIcon(paths) {
 }
 function toast(message) {
   const el = document.getElementById('toast');
+  if (!el) return;
   el.textContent = message;
   el.classList.add('show');
   clearTimeout(App.toastTimer);
   App.toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
+function getColorVal(colorKey, variant) {
+  if (!colorKey) return '';
+  const el = document.createElement('div');
+  el.className = 'c-' + colorKey;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  const cs = getComputedStyle(el);
+  const val = variant === 'soft'
+    ? cs.getPropertyValue('--cat-soft').trim()
+    : cs.getPropertyValue('--cat').trim();
+  document.body.removeChild(el);
+  return val || '';
+}
 
+/* ============================================================
+   SHEET
+   ============================================================ */
 function openSheet(builder) {
   const root = document.getElementById('sheet-root');
+  if (!root) return;
   root.innerHTML = '';
   const overlay = h('div', { class: 'overlay show', onclick: closeSheet });
   const sheet = h('div', { class: 'sheet' });
@@ -447,6 +521,10 @@ function closeSheet() {
   if (overlay) overlay.classList.remove('show');
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
+
+/* ============================================================
+   THEME / PILL COLORS
+   ============================================================ */
 function applyThemeAndTone() {
   if (!App.settings || !App.userSettings) return;
   document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
@@ -455,40 +533,24 @@ function applyThemeAndTone() {
     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.body.setAttribute('data-theme', theme);
 }
-
-/* Rewrites CSS vars from the settings saved in Firestore.
-   Works in both modes because the palette uses the .c-X class
-   which has both light and dark variants. */
 function applyPillColors() {
-  if (!App.settings || !App.settings.pillColors) return;
-  const pc = App.settings.pillColors;
+  if (!App.settings) return;
+  // NOTE: 'pin' intentionally not included — feature removed
+  const defaults = { sub: 'blue', rep: 'purple', debt: 'red' };
+  const pc = Object.assign(defaults, App.settings.pillColors || {});
   const root = document.documentElement;
-  // Create hidden probes for each color so we can read the computed value
-  // without touching the CSS class system. Simpler: read via a temp div.
-  const readColor = (key, variant) => {
-    const el = document.createElement('div');
-    el.className = 'c-' + key;
-    el.style.display = 'none';
-    document.body.appendChild(el);
-    const cs = getComputedStyle(el);
-    const val = variant === 'soft' ? cs.getPropertyValue('--cat-soft').trim()
-                                    : cs.getPropertyValue('--cat').trim();
-    document.body.removeChild(el);
-    return val;
-  };
-  root.style.setProperty('--pill-sub-bg', readColor(pc.sub, 'soft'));
-  root.style.setProperty('--pill-sub-cl', readColor(pc.sub, 'cat'));
-  root.style.setProperty('--pill-rep-bg', readColor(pc.rep, 'soft'));
-  root.style.setProperty('--pill-rep-cl', readColor(pc.rep, 'cat'));
-  root.style.setProperty('--pill-debt-bg', readColor(pc.debt, 'soft'));
-  root.style.setProperty('--pill-debt-cl', readColor(pc.debt, 'cat'));
-  root.style.setProperty('--pill-pin-bg', readColor(pc.pin, 'soft'));
-  root.style.setProperty('--pill-pin-cl', readColor(pc.pin, 'cat'));
+  ['sub','rep','debt'].forEach(type => {
+    root.style.setProperty('--pill-' + type + '-bg', getColorVal(pc[type], 'soft'));
+    root.style.setProperty('--pill-' + type + '-cl', getColorVal(pc[type], 'cat'));
+  });
 }
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
 });
 
+/* ============================================================
+   AVATAR / HEAD
+   ============================================================ */
 function getAvatarHtml(uid, size = '32px') {
   const members = App.settings?.members || {};
   const m = members[uid];
@@ -497,12 +559,19 @@ function getAvatarHtml(uid, size = '32px') {
   const isMe = App.user?.uid === uid;
   const grad = isMe ? 'av-b' : 'av-a';
   const meClass = isMe ? 'me' : '';
+  const n = parseInt(size, 10) || 32;
   if (m.avatarBase64) {
     return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};background-image:url(${m.avatarBase64});background-size:cover;background-position:center;"></div>`;
   }
-  return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${parseInt(size)*0.4}px;">${initials}</div>`;
+  return `<div class="av ${grad} ${meClass}" style="width:${size};height:${size};font-size:${Math.round(n * 0.42)}px;">${initials}</div>`;
 }
-
+function displayName(uid) {
+  const members = App.settings?.members || {};
+  const m = members[uid];
+  if (!m) return uid;
+  if (uid === App.user?.uid) return 'You';
+  return m.name || m.email || uid;
+}
 function makeAppHead(greeting, appName) {
   const head = document.createElement('div');
   head.className = 'apphead';
@@ -515,7 +584,9 @@ function makeAppHead(greeting, appName) {
   const currentUid = App.user && App.user.uid;
   const gradients = ['av-a','av-b','av-c'];
 
+  // Stack order: everyone else first, "me" LAST (rightmost + top z-index)
   const list = Object.entries(members)
+    .filter(([uid]) => !(App.settings?.bannedUids || []).includes(uid))
     .map(([uid, info]) => ({ uid, ...info, isMe: uid === currentUid }))
     .sort((a, b) => (a.isMe === b.isMe ? 0 : (a.isMe ? 1 : -1)));
 
@@ -543,8 +614,12 @@ function makeAppHead(greeting, appName) {
   return head;
 }
 
+/* ============================================================
+   NAV
+   ============================================================ */
 function renderTabbar() {
   const nav = document.getElementById('tabbar');
+  if (!nav) return;
   nav.innerHTML = '';
   TABS.forEach(t => {
     const btn = h('button', {
@@ -555,9 +630,9 @@ function renderTabbar() {
     nav.appendChild(btn);
   });
 }
-
 function mountScreens() {
   const root = document.getElementById('screens');
+  if (!root) return;
   root.innerHTML = '';
   SCREENS.forEach(id => root.appendChild(h('div', { id: 'screen-' + id, class: 'screen' })));
 }
@@ -578,7 +653,9 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ---------- HOME ---------- */
+/* ============================================================
+   HOME
+   ============================================================ */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -710,7 +787,9 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
-/* ---------- CATEGORIES ---------- */
+/* ============================================================
+   CATEGORIES
+   ============================================================ */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -794,11 +873,12 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* ---------- BUY ---------- */
+/* ============================================================
+   BUY
+   ============================================================ */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
-  const lists = s.buyLists || [{ id: 'default', name: 'General' }];
-  // Fallback if activeBuyList was deleted
+  const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
   const validListIds = lists.map(l => l.id);
   if (!validListIds.includes(App.activeBuyList)) App.activeBuyList = validListIds[0];
 
@@ -816,19 +896,26 @@ ScreenRenderers.buy = function () {
   const selector = document.createElement('div');
   selector.className = 'list-selector';
   lists.forEach(l => {
+    const colorKey = l.colorKey || 'blue';
     const chip = document.createElement('div');
-    chip.className = 'list-chip' + (l.id === currentListId ? ' active' : '');
-    chip.textContent = l.name;
+    chip.className = 'buy-chip c-' + colorKey + (l.id === currentListId ? ' active' : '');
+    const icon = l.icon || '🛒';
+    chip.innerHTML = '<span>' + esc(icon) + '</span><span>' + esc(l.name) + '</span>';
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
-    chip.oncontextmenu = (e) => { e.preventDefault(); openListMenu(l); };
-    let t = null;
-    chip.addEventListener('touchstart', () => { t = setTimeout(() => openListMenu(l), 600); });
-    chip.addEventListener('touchend', () => clearTimeout(t));
+
+    // Double-tap to edit
+    let lastTap = 0;
+    chip.ondblclick = () => openListMenu(l);
+    chip.addEventListener('touchend', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) { e.preventDefault(); openListMenu(l); lastTap = 0; }
+      else lastTap = now;
+    });
     selector.appendChild(chip);
   });
   const addChip = document.createElement('div');
-  addChip.className = 'list-chip';
-  addChip.textContent = '＋';
+  addChip.className = 'buy-chip c-amber';
+  addChip.innerHTML = '<span>＋</span><span>New</span>';
   addChip.onclick = () => openNewListEditor();
   selector.appendChild(addChip);
   wrap.appendChild(selector);
@@ -895,13 +982,167 @@ ScreenRenderers.buy = function () {
   return wrap;
 };
 
+/* Buy list editor — rename/recolor/re-icon/delete */
+function openListMenu(l) {
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
+
+    // Live editing state
+    const editing = {
+      name: l.name,
+      colorKey: l.colorKey || 'blue',
+      icon: l.icon || '🛒'
+    };
+
+    // Name field
+    const nameF = document.createElement('div');
+    nameF.className = 'field';
+    nameF.innerHTML = '<label>Name</label><input id="lm-name" value="' + esc(l.name) + '">';
+    body.appendChild(nameF);
+
+    // Icon field
+    const iconF = document.createElement('div');
+    iconF.className = 'field';
+    iconF.style.cursor = 'pointer';
+    iconF.innerHTML = '<label>Icon</label>' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<span id="lm-icon-val" style="font-size:20px;">' + esc(editing.icon) + '</span>' +
+        '<span style="color:var(--text3);">›</span>' +
+      '</div>';
+    body.appendChild(iconF);
+    const iconPanel = document.createElement('div');
+    iconPanel.style.display = 'none';
+    body.appendChild(iconPanel);
+
+    // Color field
+    const colorF = document.createElement('div');
+    colorF.className = 'field c-' + editing.colorKey;
+    colorF.style.cursor = 'pointer';
+    colorF.innerHTML = '<label>Color</label>' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<div class="color-swatch"></div>' +
+        '<span style="color:var(--text3);">›</span>' +
+      '</div>';
+    body.appendChild(colorF);
+    const colorPanel = document.createElement('div');
+    colorPanel.style.display = 'none';
+    body.appendChild(colorPanel);
+
+    iconF.onclick = () => {
+      const open = iconPanel.style.display !== 'none';
+      if (open) { iconPanel.style.display = 'none'; return; }
+      iconPanel.style.display = '';
+      colorPanel.style.display = 'none';
+      buildIconPicker(iconPanel, editing.icon, (emoji) => {
+        editing.icon = emoji;
+        document.getElementById('lm-icon-val').textContent = emoji;
+      });
+    };
+    colorF.onclick = () => {
+      const open = colorPanel.style.display !== 'none';
+      if (open) { colorPanel.style.display = 'none'; return; }
+      colorPanel.style.display = '';
+      iconPanel.style.display = 'none';
+      buildColorPicker(colorPanel, editing.colorKey, (key) => {
+        editing.colorKey = key;
+        colorF.className = 'field c-' + key;
+      });
+    };
+
+    footer.innerHTML = '';
+    const save = document.createElement('button');
+    save.className = 'primary';
+    save.textContent = 'Save';
+    save.onclick = async () => {
+      const newName = document.getElementById('lm-name').value.trim();
+      if (!newName) return;
+      const lists = App.settings.buyLists.map(x =>
+        x.id === l.id ? { ...x, name: newName, colorKey: editing.colorKey, icon: editing.icon } : x
+      );
+      await FB.updateDoc(budgetDoc(), { buyLists: lists });
+      closeSheet();
+    };
+    footer.appendChild(save);
+
+    // Delete for ANY list, including default. If default is deleted, re-create a fresh General.
+    const del = document.createElement('button');
+    del.className = 'danger';
+    del.textContent = 'Delete List & Items';
+    del.onclick = async () => {
+      if (!confirm('Delete "' + l.name + '" and all its items?')) return;
+      for (const x of App.buy.filter(x => x.listId === l.id)) {
+        await FB.deleteDoc(FB.doc(buyCol(), x.id));
+      }
+      let newLists = App.settings.buyLists.filter(x => x.id !== l.id);
+      if (newLists.length === 0) {
+        newLists = [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
+      }
+      if (App.activeBuyList === l.id) App.activeBuyList = newLists[0].id;
+      await FB.updateDoc(budgetDoc(), { buyLists: newLists });
+      closeSheet();
+    };
+    footer.appendChild(del);
+  });
+}
+
 function openNewListEditor() {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>New List</h3>';
-    const f = document.createElement('div');
-    f.className = 'field';
-    f.innerHTML = '<label>List Name</label><input id="nl-name" placeholder="e.g. Hardware">';
-    body.appendChild(f);
+
+    const editing = { name: '', colorKey: 'blue', icon: '🛒' };
+
+    const nameF = document.createElement('div');
+    nameF.className = 'field';
+    nameF.innerHTML = '<label>Name</label><input id="nl-name" placeholder="e.g. Hardware">';
+    body.appendChild(nameF);
+
+    const iconF = document.createElement('div');
+    iconF.className = 'field';
+    iconF.style.cursor = 'pointer';
+    iconF.innerHTML = '<label>Icon</label>' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<span id="nl-icon-val" style="font-size:20px;">' + editing.icon + '</span>' +
+        '<span style="color:var(--text3);">›</span>' +
+      '</div>';
+    body.appendChild(iconF);
+    const iconPanel = document.createElement('div');
+    iconPanel.style.display = 'none';
+    body.appendChild(iconPanel);
+
+    const colorF = document.createElement('div');
+    colorF.className = 'field c-' + editing.colorKey;
+    colorF.style.cursor = 'pointer';
+    colorF.innerHTML = '<label>Color</label>' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<div class="color-swatch"></div>' +
+        '<span style="color:var(--text3);">›</span>' +
+      '</div>';
+    body.appendChild(colorF);
+    const colorPanel = document.createElement('div');
+    colorPanel.style.display = 'none';
+    body.appendChild(colorPanel);
+
+    iconF.onclick = () => {
+      const open = iconPanel.style.display !== 'none';
+      if (open) { iconPanel.style.display = 'none'; return; }
+      iconPanel.style.display = '';
+      colorPanel.style.display = 'none';
+      buildIconPicker(iconPanel, editing.icon, (emoji) => {
+        editing.icon = emoji;
+        document.getElementById('nl-icon-val').textContent = emoji;
+      });
+    };
+    colorF.onclick = () => {
+      const open = colorPanel.style.display !== 'none';
+      if (open) { colorPanel.style.display = 'none'; return; }
+      colorPanel.style.display = '';
+      iconPanel.style.display = 'none';
+      buildColorPicker(colorPanel, editing.colorKey, (key) => {
+        editing.colorKey = key;
+        colorF.className = 'field c-' + key;
+      });
+    };
+
     footer.innerHTML = '';
     const btn = document.createElement('button');
     btn.className = 'primary';
@@ -909,46 +1150,19 @@ function openNewListEditor() {
     btn.onclick = async () => {
       const name = document.getElementById('nl-name').value.trim();
       if (!name) return;
-      const lists = App.settings.buyLists || [{ id: 'default', name: 'General' }];
-      const newList = { id: 'list_' + Date.now(), name };
+      const lists = (App.settings.buyLists || []).slice();
+      const newList = {
+        id: 'list_' + Date.now(),
+        name,
+        colorKey: editing.colorKey,
+        icon: editing.icon
+      };
       lists.push(newList);
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       App.activeBuyList = newList.id;
       closeSheet();
-      // Re-render with the new list active
-      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
-  });
-}
-function openListMenu(l) {
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
-    const rename = document.createElement('button');
-    rename.className = 'primary';
-    rename.textContent = 'Rename List';
-    rename.onclick = async () => {
-      const n = prompt('New name:', l.name);
-      if (!n) return;
-      const lists = App.settings.buyLists.map(x => x.id === l.id ? { ...x, name: n } : x);
-      await FB.updateDoc(budgetDoc(), { buyLists: lists });
-      closeSheet();
-    };
-    footer.appendChild(rename);
-    if (l.id !== 'default') {
-      const del = document.createElement('button');
-      del.className = 'danger';
-      del.textContent = 'Delete List & Items';
-      del.onclick = async () => {
-        if (!confirm('Delete list and all its items?')) return;
-        for (const x of App.buy.filter(x => x.listId === l.id)) await FB.deleteDoc(FB.doc(buyCol(), x.id));
-        const lists = App.settings.buyLists.filter(x => x.id !== l.id);
-        await FB.updateDoc(budgetDoc(), { buyLists: lists });
-        if (App.activeBuyList === l.id) App.activeBuyList = 'default';
-        closeSheet();
-      };
-      footer.appendChild(del);
-    }
   });
 }
 
@@ -959,9 +1173,28 @@ function toggleBuy(item) {
   });
 }
 
-/* ---------- TO PAY ---------- */
+/* ============================================================
+   TO PAY
+   ============================================================ */
+function normalizeToPayItem(item) {
+  // Migrate old shape ({tag: 'me'|'partner'|'joint'}) into new shape (tagUids + amountsByUid)
+  if (Array.isArray(item.tagUids) && item.tagUids.length > 0) return item;
+  if (!item.tag) return item;
+  const members = Object.keys(App.settings?.members || {});
+  const myUid = App.user?.uid;
+  const otherUid = members.find(u => u !== myUid);
+  let tagUids = [];
+  if (item.tag === 'me' && myUid) tagUids = [myUid];
+  else if (item.tag === 'partner' && otherUid) tagUids = [otherUid];
+  else if (item.tag === 'joint') {
+    tagUids = members.filter(u => u === myUid || u === otherUid);
+    if (tagUids.length === 0) tagUids = members.slice(0, 2);
+  }
+  return { ...item, tagUids };
+}
+
 ScreenRenderers.topay = function () {
-  const items = App.toPay.slice();
+  const items = App.toPay.map(normalizeToPayItem).slice();
   const sortKey = (x) => { if (x.paid) return 3; if (x.dueDate) return 1; return 2; };
   items.sort((a, b) => {
     const ka = sortKey(a), kb = sortKey(b);
@@ -1007,30 +1240,40 @@ ScreenRenderers.topay = function () {
 
       if (item.isRepeat && item.repeatUntil) metaTxt += ' · until ' + fmtDate(item.repeatUntil);
 
-      const amountHtml = item.amount == null ? '<div class="pamt" style="color:var(--text3);font-size:13px">—</div>' : '<div class="pamt">' + fmtAmount(item.amount) + '</div>';
+      const amountHtml = item.amount == null
+        ? '<div class="pamt" style="color:var(--text3);font-size:13px">—</div>'
+        : '<div class="pamt">' + fmtAmount(item.amount) + '</div>';
       const subTag = item.isSubscription ? '<span class="pill-sub">SUB</span>' : '';
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
-      
-      let tagHtml = '';
-      const members = Object.keys(App.settings?.members || {});
-      if (members.length > 0) {
-        const otherUid = members.find(uid => uid !== App.user.uid);
-        if (item.tag === 'me') {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(App.user.uid)}</div>`;
-        } else if (item.tag === 'partner' && otherUid) {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}</div>`;
-        } else if (item.tag === 'joint') {
-          tagHtml = `<div class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(App.user.uid)}</div>`;
-        }
+
+      // Variant E: pill badges next to name (one per tagged person, with their amount if present)
+      let badgesHtml = '';
+      const tagUids = item.tagUids || [];
+      const amountsByUid = item.amountsByUid || {};
+      if (tagUids.length > 0) {
+        badgesHtml = tagUids.map(uid => {
+          const av = getAvatarHtml(uid, '16px');
+          const amt = amountsByUid[uid] != null && amountsByUid[uid] !== ''
+            ? fmtAmount(amountsByUid[uid])
+            : '';
+          return '<span class="ppl-badge">' + av + (amt ? amt : '') + '</span>';
+        }).join('');
       }
 
       const r = document.createElement('div');
       r.className = 'prow' + (item.paid ? ' paid' : '');
       r.innerHTML =
         '<div class="pcheck' + (item.paid ? ' on' : '') + '">' + (item.paid ? '✓' : '') + '</div>' +
-        '<div class="pbody"><div class="pname">' + esc(item.name) + ' ' + subTag + repTag + debtTag + '</div>' +
-        '<div class="' + metaCls + '">' + esc(metaTxt) + '</div></div>' + tagHtml + amountHtml;
+        '<div class="pbody">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
+            '<div class="pname" style="flex-wrap:wrap;">' +
+              esc(item.name) + ' ' + subTag + repTag + debtTag + badgesHtml +
+            '</div>' +
+            amountHtml +
+          '</div>' +
+          '<div class="' + metaCls + '" style="margin-top:6px;">' + esc(metaTxt) + '</div>' +
+        '</div>';
 
       r.querySelector('.pcheck').onclick = (ev) => { ev.stopPropagation(); togglePaid(item); };
       r.onclick = () => openToPayEditor(item);
@@ -1048,7 +1291,9 @@ function togglePaid(item) {
   });
 }
 
-/* ---------- HISTORY ---------- */
+/* ============================================================
+   HISTORY
+   ============================================================ */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1090,7 +1335,7 @@ ScreenRenderers.history = function () {
       const spent  = Number(r.totalSpent) || 0;
       const over   = spent > budget;
       const pct    = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
-      
+
       let myShare = 0;
       if (showSaved) myShare = calculateMyShareForPeriod(r.periodKey, budget, us, spent);
       const mySaved = us.salary - myShare;
@@ -1103,17 +1348,18 @@ ScreenRenderers.history = function () {
         '<div class="row2">' +
           '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(budget) + '</div></div>' +
           '<div class="cell"><div class="k">Total Expenses</div><div class="v' + (over ? ' over' : '') + '">' + fmtAmount(spent) + '</div></div>' +
-          (showSaved ? 
+          (showSaved ?
             '<div class="cell"><div class="k">My Share</div><div class="v">' + fmtAmount(myShare) + '</div></div>' +
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
-        '<button class="delete-btn" onclick="event.stopPropagation();deleteHistory(\'' + r.id + '\',\'' + r.periodLabel.replace(/'/g, '') + '\')">×</button>';
+        '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month\'s record ›</div>';
       wrap.appendChild(card);
     });
   }
 
+  // Attach handlers
   setTimeout(() => {
     const prev = document.getElementById('hist-prev');
     const next = document.getElementById('hist-next');
@@ -1121,18 +1367,23 @@ ScreenRenderers.history = function () {
       prev.onclick = () => { App.historyYear = String(Number(App.historyYear) - 1); renderScreen('history'); };
     if (next && !next.classList.contains('disabled'))
       next.onclick = () => { App.historyYear = String(Number(App.historyYear) + 1); renderScreen('history'); };
+
+    wrap.querySelectorAll('[data-delete]').forEach(el => {
+      el.onclick = () => {
+        const id = el.getAttribute('data-delete');
+        const label = el.getAttribute('data-label');
+        // Double confirm
+        if (!confirm('Delete the history record for "' + label + '"?\n\nThis removes the monthly snapshot.\nExpenses are NOT deleted.')) return;
+        if (!confirm('Are you absolutely sure?\n\nThis cannot be undone.')) return;
+        FB.deleteDoc(FB.doc(historyCol(), id)).then(() => toast('History entry deleted'));
+      };
+    });
   }, 0);
   return wrap;
 };
 
-window.deleteHistory = async function(id, label) {
-  if (!confirm('Delete the record for "' + label + '"? This cannot be undone.')) return;
-  await FB.deleteDoc(FB.doc(historyCol(), id));
-  toast('History entry deleted');
-};
-
 function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
-  let share = us.budgetMethod === 'pct'
+  const share = us.budgetMethod === 'pct'
     ? totalBudget * (Number(us.budgetPct) / 100)
     : Number(us.budgetFixed) || 0;
   const periodExpenses = App.toPay.filter(x => !x.paid);
@@ -1143,22 +1394,66 @@ function calculateMyShareForPeriod(periodKey, totalBudget, us, totalSpent) {
     myToPay = Number(us.toPayFixed) || 0;
   }
   const leftover = totalBudget - totalSpent;
-  const myReturn = leftover * (us.budgetMethod === 'pct'
-    ? (Number(us.budgetPct)/100)
-    : (Number(us.budgetFixed)/totalBudget || 0));
+  const returnPct = us.budgetMethod === 'pct'
+    ? (Number(us.budgetPct) / 100)
+    : (totalBudget > 0 ? (Number(us.budgetFixed) || 0) / totalBudget : 0);
+  const myReturn = leftover * returnPct;
   return share + myToPay - myReturn;
 }
 
-/* ---------- SAVED ---------- */
+function computeMemberSplits(periodRow) {
+  const s = App.settings || DEFAULT_SETTINGS;
+  const members = s.members || {};
+  const totalBudget = Number(periodRow.budgetSnapshot) || 0;
+  const totalSpent  = Number(periodRow.totalSpent) || 0;
+  const leftover = totalBudget - totalSpent;
+
+  const perMember = [];
+  Object.entries(members).forEach(([uid, m]) => {
+    const us = { ...DEFAULT_USER_SETTINGS, ...m };
+    if (!us.salary) return;
+    const myShare = calculateMyShareForPeriod(periodRow.periodKey, totalBudget, us, totalSpent);
+    const saved = (Number(us.salary) || 0) - myShare;
+    perMember.push({ uid, saved, share: myShare });
+  });
+
+  if (perMember.length === 0) {
+    const memberList = Object.keys(members);
+    const share = memberList.length ? leftover / memberList.length : leftover;
+    memberList.forEach(uid => perMember.push({ uid, saved: Math.round(share), share: 0 }));
+  }
+  return perMember;
+}
+
+/* ============================================================
+   SAVED
+   ============================================================ */
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   const lastPeriod = computePreviousPeriod(period);
-  
-  const totalSaved = App.history.reduce((acc, h) => acc + (Number(h.budgetSnapshot) - Number(h.totalSpent)), 0); 
+
+  let totalSaved = 0;
+  let hasTracked = false;
+  App.history.forEach(h => {
+    const splits = computeMemberSplits(h);
+    if (splits.some(x => x.saved !== 0)) hasTracked = true;
+    totalSaved += splits.reduce((a, x) => a + x.saved, 0);
+  });
+  if (!hasTracked) {
+    totalSaved = App.history.reduce((acc, h) => acc + (Number(h.budgetSnapshot) - Number(h.totalSpent)), 0);
+  }
+
   const lastMonthRow = App.history.find(h => h.periodKey === lastPeriod.key);
-  let lastMonthSaved = lastMonthRow ? (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent)) : 0;
-  let lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + "-01").getMonth()];
+  let lastMonthSaved = 0;
+  if (lastMonthRow) {
+    const splits = computeMemberSplits(lastMonthRow);
+    lastMonthSaved = splits.reduce((a, x) => a + x.saved, 0);
+    if (!splits.some(x => x.saved !== 0)) {
+      lastMonthSaved = (Number(lastMonthRow.budgetSnapshot) - Number(lastMonthRow.totalSpent));
+    }
+  }
+  const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Combined wealth,', 'Saved'));
@@ -1187,35 +1482,53 @@ ScreenRenderers.saved = function () {
     empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
     wrap.appendChild(empty);
   } else {
-    const members = Object.keys(App.settings?.members || {});
+    // Goals — 11b: show only tagUid icons, no per-person breakdown
     const myUid = App.user?.uid;
     App.goals.forEach(g => {
-      const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
-      const colorVar = 'var(--cat-' + (g.colorKey || 'green') + ')';
+      // Support both old (single target/current) and new (per-person) shapes
+      const combinedTarget = computeGoalTarget(g);
+      const combinedCurrent = computeGoalCurrent(g);
+      const pct = combinedTarget > 0 ? Math.min(100, Math.round((combinedCurrent / combinedTarget) * 100)) : 0;
+
+      // Accent color — resolve literal hex from colorKey
+      const accentColor = getColorVal(g.colorKey || 'green', 'cat') || '#30b15a';
+
       const el = document.createElement('div');
       el.className = 'goal-card';
-      el.style.setProperty('--accent', colorVar);
+      el.style.setProperty('--accent', accentColor);
 
-      let tagHtml = '';
-      if (g.tag === 'me') tagHtml = `<span class="tag-avs">${getAvatarHtml(myUid)}</span>`;
-      else if (g.tag === 'partner') {
-        const otherUid = members.find(u => u !== myUid);
-        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}</span>`;
-      } else if (g.tag === 'joint') {
-        const otherUid = members.find(u => u !== myUid);
-        if (otherUid) tagHtml = `<span class="tag-avs">${getAvatarHtml(otherUid)}${getAvatarHtml(myUid)}</span>`;
+      // Just avatars — rightmost is me
+      const tagUids = g.tagUids || [];
+      let avsHtml = '';
+      if (tagUids.length > 0) {
+        const sortedUids = tagUids.slice().sort((a, b) => {
+          if (a === myUid) return 1;
+          if (b === myUid) return -1;
+          return 0;
+        });
+        avsHtml = '<span class="goal-avs">' +
+          sortedUids.map(u => getAvatarHtml(u, '22px')).join('') +
+          '</span>';
       }
+
+      // Monthly contribution pill
+      const autoAmount = Number(g.autoAmount) || 0;
+      const autoPill = autoAmount > 0
+        ? '<span class="auto-pill">' + fmtAmount(autoAmount) + '/mo</span>'
+        : '';
 
       el.innerHTML =
         '<div class="goal-top">' +
-          '<div class="goal-name">' + esc(g.icon || '🎯') + ' ' + esc(g.name) + ' ' + tagHtml + ' <span class="chev">›</span></div>' +
+          '<div class="goal-name">' +
+            esc(g.icon || '🎯') + ' ' + esc(g.name) + avsHtml +
+          '</div>' +
           '<div class="goal-badge">' + (pct >= 100 ? 'Reached' : 'On Track') + '</div>' +
         '</div>' +
-        '<div class="goal-nums"><span><b>' + fmtAmount(g.current) + '</b> / ' + fmtAmount(g.target) + '</span><span>' + pct + '%</span></div>' +
+        '<div class="goal-nums"><span><b>' + fmtAmount(combinedCurrent) + '</b> / ' + fmtAmount(combinedTarget) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
         '<div class="goal-foot">' +
-          '<span class="auto-pill">Auto: ' + fmtAmount(g.autoAmount) + ' / mo</span>' +
-          '<span>' + fmtAmount(Math.max(0, g.target - g.current)) + ' to go</span>' +
+          autoPill +
+          '<span>' + fmtAmount(Math.max(0, combinedTarget - combinedCurrent)) + ' to go</span>' +
         '</div>';
       el.onclick = () => openGoalSheet(g);
       wrap.appendChild(el);
@@ -1227,24 +1540,29 @@ ScreenRenderers.saved = function () {
   histTitle.innerHTML = '<h2>Monthly History</h2>';
   wrap.appendChild(histTitle);
 
-  const members = Object.keys(App.settings?.members || {});
-  const otherUid = members.find(uid => uid !== App.user.uid);
-
   App.history.slice(0, 3).forEach(r => {
-    const b = Number(r.budgetSnapshot) || 0;
-    const spent = Number(r.totalSpent) || 0;
-    const saved = b - spent;
-    const partnerSaved = Math.round(saved * 0.6);
-    const mySaved = Math.round(saved * 0.4);
+    const splits = computeMemberSplits(r);
+    const totalRowSaved = splits.reduce((a, x) => a + x.saved, 0) ||
+      (Number(r.budgetSnapshot) - Number(r.totalSpent));
+
+    const sorted = splits.slice().sort((a, b) => {
+      if (a.uid === App.user.uid) return 1;
+      if (b.uid === App.user.uid) return -1;
+      return 0;
+    });
+
+    const leftHtml = sorted.length > 0
+      ? `<div class="p">${getAvatarHtml(sorted[0].uid, '24px')} ${fmtAmount(sorted[0].saved)}</div>`
+      : '';
+    const rightHtml = sorted.length > 1
+      ? `<div class="p right">${fmtAmount(sorted[1].saved)} ${getAvatarHtml(sorted[1].uid, '24px')}</div>`
+      : '';
 
     const hc = document.createElement('div');
     hc.className = 'hcard';
-    hc.innerHTML = 
-      '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(saved) + '</span></div>' +
-      `<div class="hist-split-row">` +
-        `<div class="p">${getAvatarHtml(otherUid, '24px')} ${fmtAmount(partnerSaved)}</div>` +
-        `<div class="p right">${fmtAmount(mySaved)} ${getAvatarHtml(App.user.uid, '24px')}</div>` +
-      `</div>`;
+    hc.innerHTML =
+      '<div class="row1"><span class="period">' + esc(r.periodLabel) + '</span><span class="pill green">Total Saved: ' + fmtAmount(totalRowSaved) + '</span></div>' +
+      `<div class="hist-split-row">${leftHtml}${rightHtml}</div>`;
     wrap.appendChild(hc);
   });
 
@@ -1255,16 +1573,37 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-/* ---------- SETTINGS ---------- */
+// Goals data helpers (support old + new schema)
+function computeGoalTarget(g) {
+  if (g.targetsByUid && typeof g.targetsByUid === 'object') {
+    const sum = Object.values(g.targetsByUid).reduce((a, v) => a + (Number(v) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return Number(g.target) || 0;
+}
+function computeGoalCurrent(g) {
+  if (g.currentByUid && typeof g.currentByUid === 'object') {
+    const sum = Object.values(g.currentByUid).reduce((a, v) => a + (Number(v) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return Number(g.current) || 0;
+}
+
+/* ============================================================
+   SETTINGS
+   ============================================================ */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const members = s.members || {};
   const myMember = (App.user && members[App.user.uid]) || {};
+  const mySalary = Number(us.salary) || 0;
+  const salaryOk = mySalary > 0;
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Tune things,', 'Settings'));
 
+  // -------- Profile --------
   wrap.appendChild(sectionTitle('Profile'));
   const pg = group();
   const arow = document.createElement('div');
@@ -1283,58 +1622,63 @@ ScreenRenderers.settings = function () {
   pg.appendChild(arow);
   wrap.appendChild(pg);
 
+  // -------- General --------
+  wrap.appendChild(sectionTitle('General'));
+  const gg = group();
+  gg.appendChild(rowInput('Total budget', 'set-totalbudget', s.totalBudget || 0));
+  gg.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
+  wrap.appendChild(gg);
+
+  // -------- My Finances --------
   wrap.appendChild(sectionTitle('My Finances'));
   const mg = group();
   mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
 
-  // Budget contribution method + value
-  const budgetMethodRow = document.createElement('div');
-  budgetMethodRow.className = 'row';
-  budgetMethodRow.innerHTML = '<span class="lbl">My Budget Contribution</span>' +
-    '<div class="segmented" id="budget-method-seg">' +
-      '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-      '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
+  // Combined Fixed/% + amount row — My Budget Contribution
+  const budgetStack = document.createElement('div');
+  budgetStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
+  budgetStack.innerHTML =
+    '<span class="lbl">My Budget Contribution' +
+      (!salaryOk ? '' : '') +
+    '</span>' +
+    (!salaryOk ? '<span class="hint-red">⚠ Enter your salary to use this</span>' : '') +
+    '<div class="combo">' +
+      '<div class="segmented" id="budget-method-seg"' + (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
+        '<button data-method="fixed" class="' + (us.budgetMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+        '<button data-method="pct" class="' + (us.budgetMethod === 'pct' ? 'active' : '') + '">%</button>' +
+      '</div>' +
+      '<input id="set-budget-fixed" ' + (!salaryOk ? 'disabled' : '') +
+        ' value="' + (us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)) + '">' +
+      '<span class="unit">' + (us.budgetMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>' +
     '</div>';
-  mg.appendChild(budgetMethodRow);
-  setTimeout(() => {
-    budgetMethodRow.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        const m = b.dataset.method;
-        updateUserSetting('budgetMethod', m);
-        renderScreen('settings');
-      };
-    });
-  }, 0);
-  mg.appendChild(rowInput(us.budgetMethod === 'pct' ? 'Budget %' : 'Budget Amount', 'set-budget-fixed',
-    us.budgetMethod === 'pct' ? (us.budgetPct || 0) : (us.budgetFixed || 0)));
+  mg.appendChild(budgetStack);
 
-  // To Pay contribution method + value
-  const toPayMethodRow = document.createElement('div');
-  toPayMethodRow.className = 'row';
-  toPayMethodRow.innerHTML = '<span class="lbl">My To Pay Share</span>' +
-    '<div class="segmented" id="topay-method-seg">' +
-      '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
-      '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
+  // Combined Fixed/% + amount row — My To Pay Share
+  const toPayStack = document.createElement('div');
+  toPayStack.className = 'stack-row' + (!salaryOk ? ' disabled' : '');
+  toPayStack.innerHTML =
+    '<span class="lbl">My To Pay Share' +
+      (!salaryOk ? '' : '') +
+    '</span>' +
+    (!salaryOk ? '<span class="hint-red">⚠ Enter your salary to use this</span>' : '') +
+    '<div class="combo">' +
+      '<div class="segmented" id="topay-method-seg"' + (!salaryOk ? ' style="pointer-events:none;"' : '') + '>' +
+        '<button data-method="fixed" class="' + (us.toPayMethod !== 'pct' ? 'active' : '') + '">Fixed</button>' +
+        '<button data-method="pct" class="' + (us.toPayMethod === 'pct' ? 'active' : '') + '">%</button>' +
+      '</div>' +
+      '<input id="set-topay-fixed" ' + (!salaryOk ? 'disabled' : '') +
+        ' value="' + (us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)) + '">' +
+      '<span class="unit">' + (us.toPayMethod === 'pct' ? '%' : (s.currency || 'SEK')) + '</span>' +
     '</div>';
-  mg.appendChild(toPayMethodRow);
-  setTimeout(() => {
-    toPayMethodRow.querySelectorAll('[data-method]').forEach(b => {
-      b.onclick = () => {
-        const m = b.dataset.method;
-        updateUserSetting('toPayMethod', m);
-        renderScreen('settings');
-      };
-    });
-  }, 0);
-  mg.appendChild(rowInput(us.toPayMethod === 'pct' ? 'To Pay %' : 'To Pay Amount', 'set-topay-fixed',
-    us.toPayMethod === 'pct' ? (us.toPayPct || 0) : (us.toPayFixed || 0)));
+  mg.appendChild(toPayStack);
 
   mg.appendChild(rowToggle('Track savings', us.trackSavings, (el) => {
-    if (!us.salary) { toast('Enter a salary first'); el.classList.remove('on'); return; }
+    if (!salaryOk) { toast('Enter salary first'); el.classList.remove('on'); return; }
     updateUserSetting('trackSavings', el.classList.contains('on'));
   }));
   wrap.appendChild(mg);
 
+  // -------- Appearance (pin pill removed) --------
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
   const themeRow = document.createElement('div');
@@ -1361,8 +1705,8 @@ ScreenRenderers.settings = function () {
   toneRow.onclick = () => openTonePicker(us.heroTone || 'forest');
   appear.appendChild(toneRow);
 
-  ['sub','rep','debt','pin'].forEach(type => {
-    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill', pin: 'Pin Pill' }[type];
+  ['sub','rep','debt'].forEach(type => {
+    const label = { sub: 'Subscription Pill', rep: 'Repeat Pill', debt: 'Debt Pill' }[type];
     const row = document.createElement('div');
     row.className = 'row';
     const pc = s.pillColors || {};
@@ -1374,10 +1718,9 @@ ScreenRenderers.settings = function () {
 
   wrap.appendChild(appear);
 
+  // -------- Reset --------
   wrap.appendChild(sectionTitle('Reset'));
   const reset = group();
-  reset.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
-  
   const topayDayRow = document.createElement('div');
   topayDayRow.className = 'row';
   const dayVal = s.toPayResetDay === 'last' || s.toPayResetDay == null ? 'Last day ›' : s.toPayResetDay + 'th ›';
@@ -1392,6 +1735,59 @@ ScreenRenderers.settings = function () {
   reset.appendChild(runRow);
   wrap.appendChild(reset);
 
+  // -------- Members & Safety --------
+  wrap.appendChild(sectionTitle('Members & Safety'));
+  const memberGroup = group();
+  const bannedUids = s.bannedUids || [];
+  const ownerUids = s.owners || [];
+
+  Object.entries(members).forEach(([uid, m]) => {
+    const isOwner = ownerUids.includes(uid);
+    const isBanned = bannedUids.includes(uid);
+    const isMe = uid === App.user.uid;
+    const avatarHtmlRow = getAvatarHtml(uid, '36px');
+
+    const row = document.createElement('div');
+    row.className = 'member-row';
+    let actionsHtml = '';
+    if (isOwner) {
+      actionsHtml = '<span class="action protected">Protected</span>';
+    } else if (isMe) {
+      actionsHtml = '<span class="action protected">You</span>';
+    } else if (isBanned) {
+      actionsHtml =
+        '<button class="action unban" data-uid="' + esc(uid) + '" data-act="unban">Unban</button>' +
+        '<button class="action delete" data-uid="' + esc(uid) + '" data-act="delete">Delete data</button>';
+    } else {
+      actionsHtml =
+        '<button class="action kick" data-uid="' + esc(uid) + '" data-act="kick">Kick</button>' +
+        '<button class="action delete" data-uid="' + esc(uid) + '" data-act="delete">Delete data</button>';
+    }
+
+    row.innerHTML =
+      '<div class="info">' + avatarHtmlRow +
+        '<div class="txt">' +
+          '<div class="name">' + esc(m.name || m.email || uid) +
+            (isOwner ? ' · Owner' : '') + (isMe ? ' (you)' : '') + '</div>' +
+          '<div class="meta">' + esc(m.email || '') +
+            (isBanned ? ' · Banned' : '') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="actions">' + actionsHtml + '</div>';
+    memberGroup.appendChild(row);
+  });
+
+  // Clear banned list
+  if (bannedUids.length > 0) {
+    const clearRow = document.createElement('div');
+    clearRow.className = 'row';
+    clearRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Clear Banned List (' + bannedUids.length + ')</span>';
+    clearRow.onclick = () => confirmClearBanned();
+    memberGroup.appendChild(clearRow);
+  }
+  wrap.appendChild(memberGroup);
+
+  // -------- Account --------
   wrap.appendChild(sectionTitle('Account'));
   const acct = group();
   const emailRow = document.createElement('div');
@@ -1399,7 +1795,7 @@ ScreenRenderers.settings = function () {
   emailRow.innerHTML = '<span class="lbl">Email Address</span><span class="val">' + esc(App.user?.email || '—') + '</span>';
   emailRow.onclick = () => changeEmail();
   acct.appendChild(emailRow);
-  
+
   const exportRow = document.createElement('div');
   exportRow.className = 'row';
   exportRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Export Data (Backup)</span>';
@@ -1411,9 +1807,9 @@ ScreenRenderers.settings = function () {
   importRow.innerHTML = '<span class="lbl" style="color:var(--blue);font-weight:600;">Import Data (Restore)</span>';
   importRow.onclick = () => importData();
   acct.appendChild(importRow);
-  
   wrap.appendChild(acct);
 
+  // -------- Danger Zone --------
   wrap.appendChild(sectionTitle('Danger Zone'));
   const dz = group();
   const resetRow = document.createElement('div');
@@ -1430,19 +1826,77 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(signOutBtn);
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
+  // Handlers
   setTimeout(() => {
+    // Segmented toggles
+    const budgetSeg = document.getElementById('budget-method-seg');
+    if (budgetSeg) budgetSeg.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        if (!salaryOk) { toast('Enter salary first'); return; }
+        const newMethod = b.dataset.method;
+        if (newMethod !== us.budgetMethod) {
+          if (newMethod === 'pct') {
+            const total = Number(s.totalBudget) || 0;
+            const fixed = Number(us.budgetFixed) || 0;
+            updateUserSetting('budgetPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
+          } else {
+            const total = Number(s.totalBudget) || 0;
+            const pct = Number(us.budgetPct) || 0;
+            updateUserSetting('budgetFixed', Math.round(total * pct / 100));
+          }
+          updateUserSetting('budgetMethod', newMethod);
+        }
+      };
+    });
+    const toPaySeg = document.getElementById('topay-method-seg');
+    if (toPaySeg) toPaySeg.querySelectorAll('[data-method]').forEach(b => {
+      b.onclick = () => {
+        if (!salaryOk) { toast('Enter salary first'); return; }
+        const newMethod = b.dataset.method;
+        if (newMethod !== us.toPayMethod) {
+          if (newMethod === 'pct') {
+            const total = Number(s.totalBudget) || 0;
+            const fixed = Number(us.toPayFixed) || 0;
+            updateUserSetting('toPayPct', total > 0 ? Math.round((fixed / total) * 100) : 0);
+          } else {
+            const total = Number(s.totalBudget) || 0;
+            const pct = Number(us.toPayPct) || 0;
+            updateUserSetting('toPayFixed', Math.round(total * pct / 100));
+          }
+          updateUserSetting('toPayMethod', newMethod);
+        }
+      };
+    });
+
+    // Member action buttons
+    memberGroup.querySelectorAll('[data-act]').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const uid = btn.getAttribute('data-uid');
+        const act = btn.getAttribute('data-act');
+        const m = members[uid] || {};
+        if (act === 'kick')   confirmKickMember(uid, m);
+        if (act === 'unban')  confirmUnbanMember(uid, m);
+        if (act === 'delete') confirmDeleteMemberData(uid, m);
+      };
+    });
+
+    // Inputs
+    bindInput('set-totalbudget', v => saveSetting('totalBudget', Number(v) || 0));
+    bindInput('set-startday', v => {
+      const n = parseInt(v, 10);
+      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
+    });
     bindInput('set-salary', v => updateUserSetting('salary', Number(v) || 0));
     bindInput('set-budget-fixed', v => {
+      if (!salaryOk) { toast('Enter salary first'); return; }
       if (us.budgetMethod === 'pct') updateUserSetting('budgetPct', Number(v) || 0);
       else updateUserSetting('budgetFixed', Number(v) || 0);
     });
     bindInput('set-topay-fixed', v => {
+      if (!salaryOk) { toast('Enter salary first'); return; }
       if (us.toPayMethod === 'pct') updateUserSetting('toPayPct', Number(v) || 0);
       else updateUserSetting('toPayFixed', Number(v) || 0);
-    });
-    bindInput('set-startday', v => {
-      const n = parseInt(v, 10);
-      if (!isNaN(n) && n >= 1 && n <= 31) saveSetting('periodStartDay', n);
     });
   }, 0);
   return wrap;
@@ -1495,85 +1949,103 @@ function changeTheme(theme) {
   });
 }
 
-/* ---------- SAFETY / DATA ---------- */
-function exportData() {
-  const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.json`;
-  a.click();
-  toast('Backup downloaded');
+/* ============================================================
+   MEMBER MANAGEMENT (kick / ban / delete data)
+   ============================================================ */
+function confirmKickMember(uid, m) {
+  const name = m.name || m.email || uid;
+  if (!confirm('Kick "' + name + '" from the household?\n\nThey will be signed out and blocked from signing back in.\nTheir data stays — you can unban them later.')) return;
+  // Second confirm
+  if (!confirm('Are you sure?\n\n"' + name + '" will immediately lose access to Our Budget.\nYou can reverse this by tapping Unban.')) return;
+  const s = App.settings || DEFAULT_SETTINGS;
+  if ((s.owners || []).includes(uid)) { toast('Cannot kick an owner'); return; }
+  const bannedUids = (s.bannedUids || []).slice();
+  if (!bannedUids.includes(uid)) bannedUids.push(uid);
+  FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been kicked'));
 }
 
-function importData() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.json';
-  input.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
+function confirmUnbanMember(uid, m) {
+  const name = m.name || m.email || uid;
+  if (!confirm('Unban "' + name + '"?\n\nThey will be able to sign in and access the shared budget again.')) return;
+  const s = App.settings || DEFAULT_SETTINGS;
+  const bannedUids = (s.bannedUids || []).filter(u => u !== uid);
+  FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been unbanned'));
+}
+
+function confirmDeleteMemberData(uid, m) {
+  const name = m.name || m.email || uid;
+  // Show dialog with checkbox to also kick
+  openSheet((body, footer) => {
+    body.innerHTML =
+      '<h3>Delete data</h3>' +
+      '<div class="confirm-box">' +
+        '<h4><span class="warn-icon">!</span>Delete ' + esc(name) + '\'s data?</h4>' +
+        '<p>This permanently removes their profile, avatar, preferences, and household membership. This cannot be undone.</p>' +
+        '<label class="check-opt">' +
+          '<input type="checkbox" id="dm-kick">' +
+          '<span>Also kick from household (adds them to the banned list)</span>' +
+        '</label>' +
+        '<div style="font-size:11.5px;color:var(--text2);line-height:1.6;padding:10px 12px;background:var(--bg);border-radius:10px;">' +
+          '<div><b>Will be deleted:</b></div>' +
+          '<div>· Profile (name, email, avatar)</div>' +
+          '<div>· Preferences (theme, tone, salary, budget settings)</div>' +
+          '<div>· Household membership</div>' +
+          '<div style="margin-top:6px;"><b>Will stay:</b></div>' +
+          '<div>· Payments, expenses, goals they created</div>' +
+        '</div>' +
+      '</div>';
+
+    footer.innerHTML = '';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger';
+    delBtn.textContent = 'Delete Data';
+    delBtn.onclick = async () => {
+      const alsoKick = document.getElementById('dm-kick').checked;
+      closeSheet();
+      if (!confirm('Are you absolutely sure?\n\nThis will permanently delete "' + name + '"\'s personal data.\nThis cannot be undone.')) return;
       try {
-        const data = JSON.parse(ev.target.result);
-        if (!confirm('This will OVERWRITE your current data. Are you sure?')) return;
-        
-        for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
-        for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
-        for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
-        for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
-        for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
-        for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
+        const updates = { [`members.${uid}`]: null };
+        if (alsoKick) {
+          const s = App.settings || DEFAULT_SETTINGS;
+          const bannedUids = (s.bannedUids || []).slice();
+          if (!bannedUids.includes(uid)) bannedUids.push(uid);
+          updates.bannedUids = bannedUids;
+        }
+        // Firebase can't set a field to null with dot notation; use FB.deleteField via updateDoc with `delete` sentinel isn't exposed.
+        // Instead, we read full members map, remove the uid, and write it back.
+        const s = App.settings || DEFAULT_SETTINGS;
+        const members = { ...(s.members || {}) };
+        delete members[uid];
+        updates.members = members;
 
-        await FB.setDoc(budgetDoc(), data.settings);
-        for (const c of data.categories) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
-        for (const c of data.expenses) await FB.setDoc(FB.doc(expensesCol(), c.id), c);
-        for (const c of data.toPay) await FB.setDoc(FB.doc(toPayCol(), c.id), c);
-        for (const c of data.buy) await FB.setDoc(FB.doc(buyCol(), c.id), c);
-        for (const c of data.goals) await FB.setDoc(FB.doc(goalsCol(), c.id), c);
-        for (const c of data.history) await FB.setDoc(FB.doc(historyCol(), c.id), c);
-
-        toast('Data restored successfully');
-        setTimeout(() => window.location.reload(), 1500);
-      } catch (err) { toast('Import failed: Invalid file'); }
+        if (alsoKick) {
+          const bannedUids = (s.bannedUids || []).slice();
+          if (!bannedUids.includes(uid)) bannedUids.push(uid);
+          updates.bannedUids = bannedUids;
+        }
+        await FB.updateDoc(budgetDoc(), updates);
+        toast(name + '\'s data deleted');
+      } catch (e) {
+        console.error('delete member data:', e);
+        toast('Failed: ' + e.message);
+      }
     };
-    reader.readAsText(file);
-  };
-  input.click();
+    footer.appendChild(delBtn);
+  });
 }
 
-async function changeEmail() {
-  const newEmail = prompt('Enter new email address:');
-  if (!newEmail) return;
-  const password = prompt('Enter current password to confirm:');
-  if (!password) return;
-  try {
-    const cred = FB.EmailAuthProvider.credential(App.user.email, password);
-    await FB.reauthenticateWithCredential(App.user, cred);
-    await FB.updateEmail(App.user, newEmail);
-    toast('Email updated to ' + newEmail);
-  } catch (err) { toast('Failed: ' + err.message); }
+function confirmClearBanned() {
+  const s = App.settings || DEFAULT_SETTINGS;
+  const bannedUids = s.bannedUids || [];
+  if (bannedUids.length === 0) return;
+  if (!confirm('Clear the banned list?\n\n' + bannedUids.length + ' user(s) will be able to sign in again.')) return;
+  if (!confirm('Are you sure? They will regain access to the shared budget.')) return;
+  FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
-async function confirmHardReset() {
-  if (!confirm("⚠️ ARE YOU SURE?\n\nThis will permanently delete ALL data for EVERYONE. This cannot be undone.")) return;
-  const pw = prompt("Type 'RESET' to confirm:");
-  if (pw !== 'RESET') { toast('Reset cancelled'); return; }
-  try {
-    for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
-    for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
-    for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
-    for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
-    for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
-    for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
-    await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
-    toast('App has been hard reset');
-    setTimeout(() => window.location.reload(), 1500);
-  } catch (e) { toast('Reset failed: ' + e.message); }
-}
-
-/* ---------- PROFILE ---------- */
+/* ============================================================
+   PROFILE EDITOR
+   ============================================================ */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -1589,7 +2061,7 @@ function openProfileEditor() {
     const preview = document.createElement('div');
     preview.style.cssText = 'display:flex;justify-content:center;padding:16px 0;';
     const av = document.createElement('div');
-    av.style.cssText = 'width:96px;height:96px;border-radius:48px;background:linear-gradient(135deg,#7c5cff,#0a84ff);background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:28px;box-shadow:0 6px 20px rgba(10,132,255,.35);';
+    av.style.cssText = 'width:96px;height:96px;border-radius:50%;background:linear-gradient(135deg,#7c5cff,#0a84ff);background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:28px;box-shadow:0 6px 20px rgba(10,132,255,.35);';
     if (myMember.avatarBase64) av.style.backgroundImage = 'url(' + myMember.avatarBase64 + ')';
     else av.textContent = myMember.initial || 'U';
     preview.appendChild(av);
@@ -1639,14 +2111,12 @@ function openProfileEditor() {
     footer.appendChild(saveBtn);
   });
 }
-
 async function saveAvatar(b64) {
   if (!App.user) return;
   try {
     await FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.avatarBase64']: b64 });
   } catch (e) { console.error('save avatar:', e); }
 }
-
 function resizeImageToBase64(file, size) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1670,119 +2140,274 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ---------- GOALS (V4 + accent + tag) ---------- */
+/* ============================================================
+   GOALS — H5 layout (hero target + tabs)
+   ============================================================ */
 function openGoalEditor() {
-  const g = { name: '', icon: '🎯', target: 0, current: 0, autoAmount: 0, targetDate: '', colorKey: 'green', tag: 'joint' };
+  // New goal with no target/member yet
+  const g = {
+    name: '', icon: '🎯', target: 0, current: 0,
+    autoAmount: 0, targetDate: '', colorKey: 'green',
+    tagUids: [], targetsByUid: {}, currentByUid: {}, monthlySplit: {}
+  };
   showGoalSheet(g, true);
 }
-function openGoalSheet(g) {
-  showGoalSheet(g, false);
-}
+function openGoalSheet(g) { showGoalSheet(g, false); }
 
 function showGoalSheet(g, isNew) {
   openSheet((body, footer) => {
     body.innerHTML = '';
-    
+
+    // Local editing state
+    const editing = {
+      name: g.name || '',
+      icon: g.icon || '🎯',
+      targetDate: g.targetDate || '',
+      colorKey: g.colorKey || 'green',
+      tagUids: Array.isArray(g.tagUids) ? g.tagUids.slice() : [],
+      // Seed per-person values from existing data
+      targetsByUid: {},
+      currentByUid: {},
+      monthlySplit: {}
+    };
+
+    const members = Object.keys(App.settings?.members || {});
+    const myUid = App.user.uid;
+    const memberList = members.map(uid => ({
+      uid, name: displayName(uid), isMe: uid === myUid
+    }));
+
+    // Seed editing
+    if (Object.keys(g.targetsByUid || {}).length > 0) {
+      editing.targetsByUid = { ...g.targetsByUid };
+    } else if (g.target && editing.tagUids.length > 0) {
+      // Split old target evenly
+      const each = Math.round(g.target / editing.tagUids.length);
+      editing.tagUids.forEach(uid => { editing.targetsByUid[uid] = each; });
+    }
+    if (Object.keys(g.currentByUid || {}).length > 0) {
+      editing.currentByUid = { ...g.currentByUid };
+    } else if (g.current && editing.tagUids.length > 0) {
+      const each = Math.round(g.current / editing.tagUids.length);
+      editing.tagUids.forEach(uid => { editing.currentByUid[uid] = each; });
+    }
+    if (Object.keys(g.monthlySplit || {}).length > 0) {
+      editing.monthlySplit = { ...g.monthlySplit };
+    }
+
+    if (editing.tagUids.length === 0 && isNew) editing.tagUids = [myUid];
+
+    // Track which person is currently shown in the tab body
+    let activeUid = editing.tagUids.includes(myUid) ? myUid : (editing.tagUids[0] || myUid);
+
+    // ----- Icon -----
     const heroDiv = document.createElement('div');
     heroDiv.className = 'v4-hero';
-    
+
     const iconEl = document.createElement('div');
     iconEl.className = 'v4-icon';
-    iconEl.textContent = g.icon || '🎯';
+    iconEl.textContent = editing.icon;
     iconEl.onclick = () => {
-      buildIconPickerInline(g.icon || '🎯', async (emoji) => {
-        g.icon = emoji;
+      buildIconPickerInline(editing.icon, (emoji) => {
+        editing.icon = emoji;
         iconEl.textContent = emoji;
-        if (!isNew) await FB.updateDoc(FB.doc(goalsCol(), g.id), { icon: emoji });
       });
     };
     heroDiv.appendChild(iconEl);
 
     const titleInput = document.createElement('input');
     titleInput.className = 'v4-title-input';
-    titleInput.value = g.name || 'New Goal';
+    titleInput.value = editing.name || 'New Goal';
     titleInput.placeholder = 'Goal Name';
     heroDiv.appendChild(titleInput);
 
-    const amtInput = document.createElement('input');
-    amtInput.className = 'v4-amount-input';
-    amtInput.value = g.target || '';
-    amtInput.placeholder = '0';
-    amtInput.inputMode = 'numeric';
-    heroDiv.appendChild(amtInput);
-    
     body.appendChild(heroDiv);
 
+    // ----- Target date + accent color -----
     const dateRow = document.createElement('div');
     dateRow.className = 'v4-row';
     dateRow.innerHTML = '<label>Target Date (Optional)</label>' +
-      '<input id="g-date" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(g.targetDate) + '">';
+      '<input id="g-date" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" value="' + isoToDDMMYYYY(editing.targetDate) + '">';
     body.appendChild(dateRow);
     const dInp = dateRow.querySelector('#g-date');
     dInp.addEventListener('input', () => autoSlashDate(dInp));
 
-    // Accent color
     const colorRow = document.createElement('div');
     colorRow.className = 'v4-row';
-    colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + (g.colorKey || 'green') + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
+    colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + editing.colorKey + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
+    body.appendChild(colorRow);
+    const colorPanel = document.createElement('div');
+    colorPanel.style.display = 'none';
+    body.appendChild(colorPanel);
     colorRow.onclick = () => {
-      openColorPicker(g.colorKey || 'green', (newKey) => {
-        g.colorKey = newKey;
-        const sw = colorRow.querySelector('.swatch');
-        sw.className = 'swatch c-' + newKey;
-        if (!isNew) FB.updateDoc(FB.doc(goalsCol(), g.id), { colorKey: newKey });
+      const open = colorPanel.style.display !== 'none';
+      if (open) { colorPanel.style.display = 'none'; return; }
+      colorPanel.style.display = '';
+      buildColorPicker(colorPanel, editing.colorKey, (key) => {
+        editing.colorKey = key;
+        colorRow.querySelector('.swatch').className = 'swatch c-' + key;
       });
     };
-    body.appendChild(colorRow);
 
-    // Tag (Me / Partner / Joint)
-    const tagRow = document.createElement('div');
-    tagRow.className = 'v4-row';
-    tagRow.style.flexDirection = 'column';
-    tagRow.style.alignItems = 'flex-start';
-    tagRow.innerHTML = '<label style="margin-bottom:8px;">Who is this goal for?</label>';
-    const tagSeg = document.createElement('div');
-    tagSeg.className = 'segmented';
-    tagSeg.style.width = '100%';
-    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.flex = '1';
-      if ((g.tag || 'joint') === val) b.className = 'active';
-      b.onclick = () => {
-        g.tag = val;
-        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
+    // ----- H5: hero target + tabs -----
+    const h5Container = document.createElement('div');
+    body.appendChild(h5Container);
+
+    function computeCombinedTarget() {
+      return editing.tagUids.reduce((a, uid) => a + (Number(editing.targetsByUid[uid]) || 0), 0);
+    }
+
+    function renderH5() {
+      h5Container.innerHTML = '';
+
+      // Hero target
+      const heroT = document.createElement('div');
+      heroT.className = 'ge-hero-target';
+      heroT.innerHTML =
+        '<div class="num">' + fmtAmount(computeCombinedTarget()) +
+          '<span class="cur">' + esc(App.settings?.currency || 'SEK') + '</span></div>' +
+        '<div class="lbl">Combined target</div>';
+      h5Container.appendChild(heroT);
+
+      // Tag selector (who is this goal for)
+      const tagRow = document.createElement('div');
+      tagRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;';
+      memberList.forEach(m => {
+        const on = editing.tagUids.includes(m.uid);
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:6px 12px 6px 6px;border-radius:20px;border:1.5px solid ' + (on ? 'var(--blue)' : 'var(--sep)') + ';background:' + (on ? 'var(--blue-soft)' : 'var(--card)') + ';color:' + (on ? 'var(--blue)' : 'var(--text2)') + ';font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;';
+        chip.innerHTML = getAvatarHtml(m.uid, '20px') + '<span>' + esc(m.name) + '</span>';
+        chip.onclick = () => {
+          if (editing.tagUids.includes(m.uid)) {
+            editing.tagUids = editing.tagUids.filter(u => u !== m.uid);
+            delete editing.targetsByUid[m.uid];
+            delete editing.currentByUid[m.uid];
+            delete editing.monthlySplit[m.uid];
+          } else {
+            editing.tagUids.push(m.uid);
+            if (editing.targetsByUid[m.uid] == null) editing.targetsByUid[m.uid] = 0;
+            if (editing.monthlySplit[m.uid] == null) editing.monthlySplit[m.uid] = 0;
+          }
+          if (!editing.tagUids.includes(activeUid)) {
+            activeUid = editing.tagUids.includes(myUid) ? myUid : (editing.tagUids[0] || myUid);
+          }
+          renderH5();
+        };
+        tagRow.appendChild(chip);
+      });
+      h5Container.appendChild(tagRow);
+
+      if (editing.tagUids.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:20px;text-align:center;color:var(--text2);font-size:13px;';
+        empty.textContent = 'Pick at least one person';
+        h5Container.appendChild(empty);
+        return;
+      }
+
+      // Tabs — order puts me last
+      const tabs = document.createElement('div');
+      tabs.className = 'ge-tabs';
+      editing.tagUids.forEach(uid => {
+        const m = memberList.find(x => x.uid === uid);
+        if (!m) return;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ge-tab' + (uid === activeUid ? ' active' : '');
+        b.innerHTML = getAvatarHtml(uid, '20px') + '<span>' + esc(m.name) + '</span>';
+        b.onclick = () => { activeUid = uid; renderH5(); };
+        tabs.appendChild(b);
+      });
+      h5Container.appendChild(tabs);
+
+      // Active person inputs
+      const activeM = memberList.find(x => x.uid === activeUid);
+      const inputs = document.createElement('div');
+      inputs.className = 'ge-inputs';
+      inputs.innerHTML =
+        '<div class="cell">' +
+          '<div class="lbl">Target</div>' +
+          '<input id="ge-target" inputmode="numeric" value="' + (editing.targetsByUid[activeUid] || '') + '" placeholder="0">' +
+        '</div>' +
+        '<div class="cell">' +
+          '<div class="lbl">Monthly</div>' +
+          '<input id="ge-monthly" inputmode="numeric" value="' + (editing.monthlySplit[activeUid] || '') + '" placeholder="0">' +
+        '</div>';
+      h5Container.appendChild(inputs);
+
+      // Foot: active person's share
+      const foot = document.createElement('div');
+      foot.className = 'ge-foot';
+      const activeTarget = Number(editing.targetsByUid[activeUid]) || 0;
+      const activeMonthly = Number(editing.monthlySplit[activeUid]) || 0;
+      const footLabel = activeM && activeM.isMe ? 'Your share' : (activeM ? activeM.name + '\'s share' : 'Share');
+      foot.innerHTML =
+        '<span>' + esc(footLabel) + '</span>' +
+        '<span class="tot">' + fmtAmount(activeTarget) + ' ' + esc(App.settings?.currency || 'SEK') + ' · ' + fmtAmount(activeMonthly) + '/mo</span>';
+      h5Container.appendChild(foot);
+
+      // Input handlers — read on input, persist on save
+      const tInp = document.getElementById('ge-target');
+      const mInp = document.getElementById('ge-monthly');
+      if (tInp) tInp.oninput = () => {
+        editing.targetsByUid[activeUid] = Number(tInp.value) || 0;
+        // Update hero target + foot
+        heroT.querySelector('.num').innerHTML = fmtAmount(computeCombinedTarget()) +
+          '<span class="cur">' + esc(App.settings?.currency || 'SEK') + '</span>';
+        foot.querySelector('.tot').textContent =
+          fmtAmount(Number(editing.targetsByUid[activeUid]) || 0) + ' ' +
+          (App.settings?.currency || 'SEK') + ' · ' +
+          fmtAmount(Number(editing.monthlySplit[activeUid]) || 0) + '/mo';
       };
-      tagSeg.appendChild(b);
-    });
-    tagRow.appendChild(tagSeg);
-    body.appendChild(tagRow);
+      if (mInp) mInp.oninput = () => {
+        editing.monthlySplit[activeUid] = Number(mInp.value) || 0;
+        foot.querySelector('.tot').textContent =
+          fmtAmount(Number(editing.targetsByUid[activeUid]) || 0) + ' ' +
+          (App.settings?.currency || 'SEK') + ' · ' +
+          fmtAmount(Number(editing.monthlySplit[activeUid]) || 0) + '/mo';
+      };
+    }
+    renderH5();
 
+    // Actions
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'v4-actions';
-    
+
     const saveBtn = document.createElement('button');
     saveBtn.className = 'v4-btn-save';
     saveBtn.textContent = isNew ? 'Create Goal' : 'Save Goal';
     saveBtn.onclick = async () => {
       const name = titleInput.value.trim();
-      const target = Number(amtInput.value);
+      if (!name) { toast('Name required'); return; }
+      if (editing.tagUids.length === 0) { toast('Pick at least one person'); return; }
+
       const targetDate = ddmmyyyyToISO(dInp.value) || '';
-      if (!name || !target) { toast('Name and Amount required'); return; }
-      
+      const combinedTarget = computeCombinedTarget();
+      if (combinedTarget <= 0) { toast('Target must be > 0'); return; }
+
+      const autoTotal = editing.tagUids.reduce((a, uid) => a + (Number(editing.monthlySplit[uid]) || 0), 0);
+
+      const payload = {
+        name,
+        icon: editing.icon,
+        targetDate,
+        colorKey: editing.colorKey,
+        tagUids: editing.tagUids,
+        targetsByUid: editing.targetsByUid,
+        currentByUid: editing.currentByUid,
+        monthlySplit: editing.monthlySplit,
+        autoAmount: autoTotal,
+        // Keep legacy fields as mirrors so old code paths still work
+        target: combinedTarget,
+        current: Object.values(editing.currentByUid).reduce((a, v) => a + (Number(v) || 0), 0)
+      };
+
       closeSheet();
       if (isNew) {
-        await FB.addDoc(goalsCol(), {
-          name, icon: g.icon, target, current: 0,
-          autoAmount: Number(g.autoAmount) || 0,
-          targetDate, colorKey: g.colorKey, tag: g.tag || 'joint',
-          createdAt: new Date().toISOString()
-        });
+        await FB.addDoc(goalsCol(), { ...payload, createdAt: new Date().toISOString() });
       } else {
-        await FB.updateDoc(FB.doc(goalsCol(), g.id), {
-          name, icon: g.icon, target, targetDate, colorKey: g.colorKey, tag: g.tag || 'joint'
-        });
+        await FB.updateDoc(FB.doc(goalsCol(), g.id), payload);
       }
     };
     actionsDiv.appendChild(saveBtn);
@@ -1790,7 +2415,7 @@ function showGoalSheet(g, isNew) {
     if (!isNew) {
       const delBtn = document.createElement('button');
       delBtn.className = 'v4-btn-del';
-      delBtn.innerHTML = 'Delete';
+      delBtn.textContent = 'Delete';
       delBtn.onclick = async () => {
         if (!confirm('Delete this goal?')) return;
         closeSheet();
@@ -1798,17 +2423,18 @@ function showGoalSheet(g, isNew) {
       };
       actionsDiv.appendChild(delBtn);
     }
-    
+
     body.appendChild(actionsDiv);
     footer.innerHTML = '';
   });
 }
 
-/* ---------- CATEGORY EDITOR ---------- */
+/* ============================================================
+   CATEGORY EDITOR
+   ============================================================ */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
-
   let pinState = (App.userSettings.pins || []).includes(editing.id);
 
   openSheet((body, footer) => {
@@ -1925,7 +2551,9 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* ---------- COLOR PICKERS ---------- */
+/* ============================================================
+   COLOR PICKER
+   ============================================================ */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -1949,14 +2577,6 @@ function buildColorPicker(container, current, onPick) {
   });
   container.appendChild(grid);
 }
-function openColorPicker(current, onPick) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick Color</h3>';
-    const container = document.createElement('div');
-    body.appendChild(container);
-    buildColorPicker(container, current, (key) => { onPick(key); closeSheet(); });
-  });
-}
 function openPillColorPicker(type) {
   openSheet((body) => {
     body.innerHTML = '<h3>Pick Pill Color</h3>';
@@ -1978,7 +2598,9 @@ function openPillColorPicker(type) {
   });
 }
 
-/* ---------- ICON PICKER ---------- */
+/* ============================================================
+   ICON PICKER — all category emojis
+   ============================================================ */
 const ICONS = {
   'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
   'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
@@ -2064,7 +2686,9 @@ function buildIconPickerInline(current, onPick) {
   });
 }
 
-/* ---------- TONE PICKER ---------- */
+/* ============================================================
+   TONE PICKER
+   ============================================================ */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -2112,7 +2736,9 @@ function openTonePicker(currentKey) {
   });
 }
 
-/* ---------- EXPENSE EDITOR ---------- */
+/* ============================================================
+   EXPENSE EDITOR
+   ============================================================ */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2123,7 +2749,7 @@ function openExpenseEditor(expense, prefillName) {
     nameF.className = 'field';
     nameF.innerHTML = '<label>Name</label><input id="exp-name" value="' + esc(working.name) + '">';
     body.appendChild(nameF);
-    
+
     const amtF = document.createElement('div');
     amtF.className = 'field';
     amtF.innerHTML = '<label>Amount</label><input id="exp-amt" inputmode="numeric" value="' + (working.amount || '') + '" placeholder="0">';
@@ -2166,10 +2792,16 @@ function openExpenseEditor(expense, prefillName) {
       closeSheet();
       if (isNew) {
         const periodKey = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay).key;
-        await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey });
+        await FB.addDoc(expensesCol(), {
+          name, amount, categoryId: chosenCat, subcategoryId: '',
+          dateAdded: new Date().toISOString(), periodKey
+        });
         await syncCurrentHistoryBudget();
       } else {
-        await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat });
+        await FB.updateDoc(FB.doc(expensesCol(), expense.id), {
+          name, amount, categoryId: chosenCat,
+          subcategoryId: working.subcategoryId || ''
+        });
         await recomputeHistoryTotal(expense.periodKey);
       }
     };
@@ -2188,12 +2820,27 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ---------- TO PAY EDITOR ---------- */
+/* ============================================================
+   TO PAY EDITOR — per-person splits
+   ============================================================ */
 function openToPayEditor(item) {
   const isNew = !item;
-  if (!item) item = { name: '', amount: null, dueDate: '', paid: false, paidDate: null, isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '', tag: 'joint' };
+  if (!item) item = {
+    name: '', amount: null, dueDate: '', paid: false, paidDate: null,
+    isSubscription: false, isRepeat: false, isDebt: false, repeatUntil: '',
+    tagUids: [App.user.uid], amountsByUid: {}
+  };
+  item = normalizeToPayItem(item);
+
   let type = item.isSubscription ? 'subscription' : item.isRepeat ? 'repeat' : item.isDebt ? 'debt' : 'none';
-  let localTag = item.tag || 'joint';
+  let currentTagUids = Array.isArray(item.tagUids) ? item.tagUids.slice() : [];
+  const amountsByUid = { ...(item.amountsByUid || {}) };
+  if (currentTagUids.length === 0) currentTagUids = [App.user.uid];
+
+  const members = Object.keys(App.settings?.members || {});
+  const memberList = members.map(uid => ({
+    uid, name: displayName(uid), isMe: uid === App.user.uid,
+  }));
 
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + (isNew ? 'New payment' : 'Edit payment') + '</h3>';
@@ -2201,7 +2848,7 @@ function openToPayEditor(item) {
     nameF.className = 'field';
     nameF.innerHTML = '<label>Name</label><input id="tp-name" value="' + esc(item.name) + '" placeholder="Rent, Internet…">';
     body.appendChild(nameF);
-    
+
     const amtF = document.createElement('div');
     amtF.className = 'field';
     amtF.innerHTML = '<label>Amount</label><input id="tp-amt" inputmode="numeric" value="' + (item.amount != null ? item.amount : '') + '" placeholder="Optional">';
@@ -2242,28 +2889,80 @@ function openToPayEditor(item) {
     body.appendChild(repeatEndF);
     repeatEndF.querySelector('#tp-repeat-end').addEventListener('input', (e) => autoSlashDate(e.target));
 
-    const tagF = document.createElement('div');
-    tagF.className = 'field';
-    tagF.style.flexDirection = 'column';
-    tagF.style.alignItems = 'flex-start';
-    tagF.innerHTML = '<label style="margin-bottom:8px;">Who pays?</label>';
-    const tagSeg = document.createElement('div');
-    tagSeg.className = 'segmented';
-    tagSeg.style.width = '100%';
-    [['me','Me'],['partner','Partner'],['joint','Joint']].forEach(([val, label]) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.flex = '1';
-      if (localTag === val) b.className = 'active';
-      b.onclick = () => {
-        localTag = val;
-        tagSeg.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-      };
-      tagSeg.appendChild(b);
-    });
-    tagF.appendChild(tagSeg);
-    body.appendChild(tagF);
+    // Per-person split rows
+    const secLbl = document.createElement('div');
+    secLbl.style.cssText = 'font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin:18px 4px 10px;';
+    secLbl.textContent = 'Who pays?';
+    body.appendChild(secLbl);
+
+    const splitContainer = document.createElement('div');
+    body.appendChild(splitContainer);
+
+    const totalRow = document.createElement('div');
+    totalRow.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;padding:12px 6px 4px;font-size:12px;font-weight:600;color:var(--text2);';
+    body.appendChild(totalRow);
+
+    function getPrimaryAmount() {
+      const v = document.getElementById('tp-amt')?.value.trim() || '';
+      if (v === '') return null;
+      const n = Number(v);
+      return isNaN(n) ? null : n;
+    }
+    function updateTotal() {
+      let total = 0;
+      currentTagUids.forEach(uid => { total += Number(amountsByUid[uid]) || 0; });
+      const main = getPrimaryAmount();
+      const warn = main != null && main > 0 && Math.abs(total - main) > 0.5;
+      totalRow.style.color = warn ? 'var(--red)' : 'var(--text2)';
+      totalRow.innerHTML =
+        '<span>' + (warn ? 'Total assigned (≠ ' + fmtAmount(main) + ')' : 'Total assigned') + '</span>' +
+        '<span style="font-size:15px;font-weight:700;color:' + (warn ? 'var(--red)' : 'var(--text)') + ';">' +
+          fmtAmount(total) +
+        '</span>';
+    }
+    function renderSplits() {
+      splitContainer.innerHTML = '';
+      memberList.forEach(m => {
+        const isOn = currentTagUids.includes(m.uid);
+        const amtVal = amountsByUid[m.uid] != null ? amountsByUid[m.uid] : '';
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:14px;background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:8px;' + (isOn ? '' : 'opacity:.45;');
+        row.innerHTML =
+          getAvatarHtml(m.uid, '38px') +
+          '<div style="flex:1;min-width:0;font-size:15px;font-weight:600;letter-spacing:-.2px;">' + esc(m.name) + '</div>' +
+          '<div style="display:flex;align-items:baseline;gap:2px;flex-shrink:0;">' +
+            '<input class="amt" data-uid="' + m.uid + '" inputmode="numeric" value="' + amtVal + '"' +
+              (isOn ? '' : ' disabled') +
+              ' style="width:80px;text-align:right;font-size:16px;font-weight:600;font-family:inherit;background:transparent;border:none;outline:none;color:var(--text);padding:0;">' +
+            '<span style="font-size:11px;font-weight:600;color:var(--text2);">' + esc(App.settings?.currency || 'SEK') + '</span>' +
+          '</div>' +
+          '<div class="check" style="width:24px;height:24px;border-radius:12px;border:1.5px solid ' + (isOn ? 'var(--green)' : 'var(--track)') + ';background:' + (isOn ? 'var(--green)' : 'transparent') + ';color:' + (isOn ? '#fff' : 'transparent') + ';display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0;cursor:pointer;">' +
+            (isOn ? '✓' : '') +
+          '</div>';
+
+        row.querySelector('.check').onclick = () => {
+          if (currentTagUids.includes(m.uid)) currentTagUids = currentTagUids.filter(u => u !== m.uid);
+          else currentTagUids.push(m.uid);
+          renderSplits();
+        };
+
+        const amtInp = row.querySelector('input.amt');
+        if (isOn) {
+          amtInp.addEventListener('input', () => {
+            amountsByUid[m.uid] = Number(amtInp.value) || 0;
+            updateTotal();
+          });
+        }
+        splitContainer.appendChild(row);
+      });
+      updateTotal();
+    }
+    renderSplits();
+
+    setTimeout(() => {
+      const amtInput = document.getElementById('tp-amt');
+      if (amtInput) amtInput.addEventListener('input', updateTotal);
+    }, 0);
 
     footer.innerHTML = '';
     const save = document.createElement('button');
@@ -2279,18 +2978,33 @@ function openToPayEditor(item) {
       const dueISO = dueStr ? ddmmyyyyToISO(dueStr) : '';
       if ((type === 'subscription' || type === 'repeat' || type === 'debt') && !dueISO) { toast('Recurring items need a valid due date'); return; }
       if (dueStr && !dueISO) { toast('Invalid date — use DD/MM/YYYY'); return; }
-      
       let repeatUntilISO = '';
       if (type === 'repeat' || type === 'debt') {
         const repStr = document.getElementById('tp-repeat-end').value;
         repeatUntilISO = repStr ? ddmmyyyyToISO(repStr) : '';
         if (!repeatUntilISO) { toast('Repeat needs a valid end date'); return; }
       }
+      if (currentTagUids.length === 0) { toast('Pick at least one person'); return; }
 
-      const data = { name, amount, dueDate: dueISO, isSubscription: type === 'subscription', isRepeat: type === 'repeat', isDebt: type === 'debt', repeatUntil: repeatUntilISO || '', tag: localTag };
+      const cleanAmounts = {};
+      currentTagUids.forEach(uid => { cleanAmounts[uid] = Number(amountsByUid[uid]) || 0; });
+
+      const data = {
+        name, amount,
+        dueDate: dueISO,
+        isSubscription: type === 'subscription',
+        isRepeat: type === 'repeat',
+        isDebt: type === 'debt',
+        repeatUntil: repeatUntilISO || '',
+        tagUids: currentTagUids,
+        amountsByUid: cleanAmounts
+      };
       closeSheet();
-      if (isNew) await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
+      if (isNew) {
+        await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
+      } else {
+        await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
+      }
     };
     footer.appendChild(save);
 
@@ -2306,7 +3020,9 @@ function openToPayEditor(item) {
   });
 }
 
-/* ---------- HISTORY HELPERS ---------- */
+/* ============================================================
+   HISTORY HELPERS
+   ============================================================ */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -2335,7 +3051,9 @@ async function recomputeHistoryTotal(periodKey) {
   if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
 }
 
-/* ---------- PERIODS ---------- */
+/* ============================================================
+   PERIODS
+   ============================================================ */
 function computeCurrentPeriod(startDay) {
   startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const now = new Date();
@@ -2359,17 +3077,28 @@ function computeCurrentPeriod(startDay) {
 }
 function computePreviousPeriod(currentPeriod) {
   const d = parseLocalDate(currentPeriod.start);
-  const prevStart = addOneMonth(d); prevStart.setMonth(prevStart.getMonth() - 2);
-  return computeCurrentPeriodForDate(prevStart, App.settings.periodStartDay);
+  const prev = new Date(d.getFullYear(), d.getMonth() - 1, d.getDate());
+  return computeCurrentPeriodForDate(prev, App.settings.periodStartDay);
 }
 function computeCurrentPeriodForDate(date, startDay) {
+  startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
   let sYear = y, sMonth = m;
-  if (d < startDay) { const prev = new Date(y, m - 1, 1); sYear = prev.getFullYear(); sMonth = prev.getMonth(); }
+  if (d < startDay) {
+    const prev = new Date(y, m - 1, 1);
+    sYear = prev.getFullYear();
+    sMonth = prev.getMonth();
+  }
   const startDate = clampDay(sYear, sMonth, startDay);
   const nextStart = clampDay(sYear, sMonth + 1, startDay);
   const endDate = new Date(nextStart); endDate.setDate(endDate.getDate() - 1);
-  return { key: pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1), label: formatPeriodLabel(startDate, endDate) };
+  return {
+    key: pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1),
+    year: startDate.getFullYear(),
+    start: startDate.toISOString(),
+    end: endDate.toISOString(),
+    label: formatPeriodLabel(startDate, endDate)
+  };
 }
 function clampDay(year, month0, day) {
   const lastDay = new Date(year, month0 + 1, 0).getDate();
@@ -2392,7 +3121,9 @@ function labelForDay(iso) {
   return full;
 }
 
-/* ---------- RESET DAY PICKER ---------- */
+/* ============================================================
+   RESET DAY PICKER + TO PAY RESET
+   ============================================================ */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -2418,13 +3149,16 @@ function openResetDayPicker() {
     specRow.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
         '<div class="radio" data-radio="specific" style="width:20px;height:20px;border-radius:10px;border:2px solid var(--blue);display:flex;align-items:center;justify-content:center;color:var(--blue);font-weight:800;font-size:12px;">' + (mode === 'specific' ? '✓' : '') + '</div>' +
         '<span style="font-weight:600;">Specific day</span></div>' +
-      '<input id="rs-day" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="' + (mode === 'specific' ? Number(s.toPayResetDay) : '') + '" placeholder="25" style="width:56px;text-align:right;background:transparent;border:none;outline:none;font-size:16px;font-weight:600;color:var(--text);">';
+      '<input id="rs-day" type="text" inputmode="numeric" maxlength="2" value="' + (mode === 'specific' ? Number(s.toPayResetDay) : '') + '" placeholder="25" style="width:56px;text-align:right;background:transparent;border:none;outline:none;font-size:16px;font-weight:600;color:var(--text);">';
     body.appendChild(specRow);
 
     const setMode = (m) => {
       mode = m;
       body.querySelectorAll('[data-radio]').forEach(r => { r.textContent = (r.dataset.radio === m) ? '✓' : ''; });
-      if (m === 'specific') setTimeout(() => document.getElementById('rs-day')?.focus(), 20);
+      if (m === 'specific') {
+        const inp = document.getElementById('rs-day');
+        if (inp) setTimeout(() => inp.focus(), 20);
+      }
     };
     lastRow.onclick = () => setMode('last');
     specRow.onclick = (ev) => { if (ev.target.id !== 'rs-day') setMode('specific'); };
@@ -2447,10 +3181,8 @@ function openResetDayPicker() {
     footer.appendChild(save);
   });
 }
-
 function confirmRunReset() {
-  const ok = confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.');
-  if (!ok) return;
+  if (!confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.')) return;
   runToPayReset().then(() => toast('To Pay reset ran'));
 }
 async function runToPayReset() {
@@ -2506,24 +3238,126 @@ async function maybeAutoReset() {
   const resetKey = resetDate.getFullYear() + '-' + pad2(resetDate.getMonth() + 1);
   if (App.settings.lastResetKey === resetKey) return;
   await runToPayReset();
+  await applyGoalAutoContributions(resetKey);
   await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
 }
 
-/* ---------- AUTO-CLEANUP ---------- */
-async function cleanupOldExpenses() {
-  const currentKey = computeCurrentPeriod(App.settings.periodStartDay).key;
-  const oldExpenses = App.expenses.filter(e => e.periodKey && e.periodKey < currentKey);
-  if (oldExpenses.length === 0) return;
-  for (const e of oldExpenses) await FB.deleteDoc(FB.doc(expensesCol(), e.id));
+async function applyGoalAutoContributions(monthKey) {
+  if (!App.goals || App.goals.length === 0) return;
+  for (const g of App.goals) {
+    if (g.lastContributionMonth === monthKey) continue;
+    const autoAmount = Number(g.autoAmount) || 0;
+    if (autoAmount <= 0) continue;
+    const newCurrent = (Number(g.current) || 0) + autoAmount;
+    const updates = { current: newCurrent, lastContributionMonth: monthKey };
+    // Also bump per-person current if present
+    if (g.currentByUid && g.monthlySplit) {
+      const newCurrentByUid = { ...g.currentByUid };
+      Object.entries(g.monthlySplit).forEach(([uid, amt]) => {
+        newCurrentByUid[uid] = (Number(newCurrentByUid[uid]) || 0) + (Number(amt) || 0);
+      });
+      updates.currentByUid = newCurrentByUid;
+    }
+    try {
+      await FB.updateDoc(FB.doc(goalsCol(), g.id), updates);
+    } catch (e) { console.error('goal auto contribution:', e); }
+  }
 }
 
-/* ---------- FAB ---------- */
-document.getElementById('fab').addEventListener('click', () => {
-  if (App.screen === 'home') openExpenseEditor(null);
-  else if (App.screen === 'topay') openToPayEditor(null);
-});
+/* ============================================================
+   EXPORT / IMPORT / RESET
+   ============================================================ */
+function exportData() {
+  const data = {
+    settings: App.settings,
+    categories: App.categories,
+    expenses: App.expenses,
+    toPay: App.toPay,
+    buy: App.buy,
+    history: App.history,
+    goals: App.goals
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `OurBudget_Backup_${new Date().toISOString().split('T')[0]}.json`;
+  a.click();
+  toast('Backup downloaded');
+}
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!confirm('This will OVERWRITE your current data. Are you sure?')) return;
 
-/* ---------- AUTO-CLEAR INPUTS ---------- */
+        for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
+        for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
+        for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
+        for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
+        for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
+        for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
+
+        const preserved = {
+          owners: (App.settings && App.settings.owners) || [],
+          bannedUids: (App.settings && App.settings.bannedUids) || []
+        };
+        await FB.setDoc(budgetDoc(), { ...(data.settings || {}), ...preserved });
+
+        for (const c of (data.categories || [])) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
+        for (const c of (data.expenses || []))   await FB.setDoc(FB.doc(expensesCol(), c.id), c);
+        for (const c of (data.toPay || []))      await FB.setDoc(FB.doc(toPayCol(), c.id), c);
+        for (const c of (data.buy || []))        await FB.setDoc(FB.doc(buyCol(), c.id), c);
+        for (const c of (data.goals || []))      await FB.setDoc(FB.doc(goalsCol(), c.id), c);
+        for (const c of (data.history || []))    await FB.setDoc(FB.doc(historyCol(), c.id), c);
+
+        toast('Data restored successfully');
+        setTimeout(() => window.location.reload(), 1500);
+      } catch (err) { toast('Import failed: Invalid file'); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+async function changeEmail() {
+  const newEmail = prompt('Enter new email address:');
+  if (!newEmail) return;
+  const password = prompt('Enter current password to confirm:');
+  if (!password) return;
+  try {
+    const cred = FB.EmailAuthProvider.credential(App.user.email, password);
+    await FB.reauthenticateWithCredential(App.user, cred);
+    await FB.updateEmail(App.user, newEmail);
+    toast('Email updated to ' + newEmail);
+  } catch (err) { toast('Failed: ' + err.message); }
+}
+async function confirmHardReset() {
+  if (!confirm("Are you sure?\n\nThis will permanently delete ALL data for EVERYONE.\nExpenses, categories, goals, history, members — everything.\nThis cannot be undone.")) return;
+  const pw = prompt("Type 'RESET' to confirm:");
+  if (pw !== 'RESET') { toast('Reset cancelled'); return; }
+  if (!confirm('Final confirmation:\n\nAll data will be gone. Continue?')) return;
+  try {
+    for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
+    for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
+    for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
+    for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
+    for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
+    for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
+    await FB.setDoc(budgetDoc(), DEFAULT_SETTINGS);
+    toast('App has been hard reset');
+    setTimeout(() => window.location.reload(), 1500);
+  } catch (e) { toast('Reset failed: ' + e.message); }
+}
+
+/* ============================================================
+   INPUT FOCUS BEHAVIOR
+   ============================================================ */
 document.addEventListener('focusin', (e) => {
   if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
     if (!e.target.dataset.original && e.target.value) {
