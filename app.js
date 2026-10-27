@@ -2796,8 +2796,21 @@ function openPillColorPicker(type) {
       chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
       chip.onclick = async () => {
         const newPC = { ...(App.settings.pillColors || {}), [type]: key };
-        await saveSetting('pillColors', newPC);
+
+        // Optimistic local update so the UI reflects the change immediately
+        App.settings = { ...App.settings, pillColors: newPC };
+        applyPillColors();
+
         closeSheet();
+
+        try {
+          await FB.updateDoc(budgetDoc(), { pillColors: newPC });
+          // Re-render settings so the swatch on the row shows the new color
+          if (App.screen === 'settings') renderScreen('settings');
+        } catch (e) {
+          console.error('save pill color failed:', e);
+          toast('Save failed: ' + e.message);
+        }
       };
       grid.appendChild(chip);
     });
