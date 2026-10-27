@@ -276,14 +276,8 @@ input[type="number"]{-moz-appearance:textfield;}
 .pin .bar-in>div{height:100%;background:var(--cat);border-radius:20px;}
 .pin .bar-pct{font-size:9px;font-weight:800;color:var(--cat);flex-shrink:0;}
 
-/* Home pinned — stacked icons only (no amounts) */
-.pin-tags{
-  display:inline-flex;align-items:center;gap:0;margin-top:6px;
-}
-.pin-tags .av{
-  width:18px;height:18px;font-size:8px;
-  border:1.5px solid var(--card);
-}
+.pin-tags{display:inline-flex;align-items:center;gap:0;margin-top:6px;}
+.pin-tags .av{width:18px;height:18px;font-size:8px;border:1.5px solid var(--card);}
 .pin-tags .av + .av{margin-left:-6px;}
 .pin-tags .av.me{z-index:10;}
 
@@ -465,9 +459,6 @@ input[type="number"]{-moz-appearance:textfield;}
 .pill-rep{background:var(--pill-rep-bg);color:var(--pill-rep-cl);}
 .pill-debt{background:var(--pill-debt-bg);color:var(--pill-debt-cl);}
 
-/* ============================================================
-   UNIFIED PILL — 20px avatars, user-chosen styling, both modes
-   ============================================================ */
 .ppl-badge-inline{
   display:inline-flex;align-items:center;gap:6px;
   background:var(--pill-bg);
@@ -482,7 +473,6 @@ input[type="number"]{-moz-appearance:textfield;}
 .ppl-badge-inline.no-amt{padding:0;background:transparent;}
 .ppl-badge-inline.no-amt .av{width:20px;height:20px;font-size:9px;}
 
-/* Pause bars — no circle background */
 .pause-icon-plain{
   display:inline-flex;align-items:center;justify-content:center;
   gap:2.5px;
@@ -597,46 +587,19 @@ input[type="number"]{-moz-appearance:textfield;}
 .color-chip.on::after{content:'✓';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:800;text-shadow:0 1px 2px rgba(0,0,0,.4);}
 .color-swatch{width:22px;height:22px;border-radius:11px;background:var(--cat);box-shadow:inset 0 0 0 2px rgba(255,255,255,.7),0 1px 3px rgba(0,0,0,.12);}
 
-/* Split row — compact Fixed / % per person */
 .compact-split{
   display:flex;align-items:center;gap:8px;padding:8px 10px;
   background:var(--bg);border-radius:10px;font-size:12px;
   margin-bottom:6px;
 }
-.compact-split .av{
-  width:22px;height:22px;font-size:9px;border:none;margin:0;flex-shrink:0;
-}
-.compact-split .name{
-  flex:1;font-weight:600;color:var(--text);
-  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.compact-split .seg{
-  display:inline-flex;background:var(--card);border-radius:6px;padding:2px;gap:1px;
-}
-.compact-split .seg button{
-  border:none;background:transparent;color:var(--text2);
-  padding:3px 8px;border-radius:5px;font-family:inherit;
-  font-size:10px;font-weight:700;cursor:pointer;
-}
-.compact-split .seg button.active{
-  background:var(--bg);color:var(--text);
-  box-shadow:0 1px 2px rgba(0,0,0,.08);
-}
-.compact-split .val{
-  display:inline-flex;align-items:baseline;gap:2px;
-  background:var(--card);border-radius:6px;
-  padding:4px 8px;min-width:70px;
-  justify-content:flex-end;
-}
-.compact-split .val input{
-  width:60px;background:transparent;border:none;outline:none;
-  font-family:inherit;font-size:12px;font-weight:600;
-  color:var(--text);text-align:right;
-  font-variant-numeric:tabular-nums;padding:0;
-}
-.compact-split .val .u{
-  font-size:9px;color:var(--text3);font-weight:600;
-}
+.compact-split .av{width:22px;height:22px;font-size:9px;border:none;margin:0;flex-shrink:0;}
+.compact-split .name{flex:1;font-weight:600;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.compact-split .seg{display:inline-flex;background:var(--card);border-radius:6px;padding:2px;gap:1px;}
+.compact-split .seg button{border:none;background:transparent;color:var(--text2);padding:3px 8px;border-radius:5px;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;}
+.compact-split .seg button.active{background:var(--bg);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08);}
+.compact-split .val{display:inline-flex;align-items:baseline;gap:2px;background:var(--card);border-radius:6px;padding:4px 8px;min-width:70px;justify-content:flex-end;}
+.compact-split .val input{width:60px;background:transparent;border:none;outline:none;font-family:inherit;font-size:12px;font-weight:600;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;padding:0;}
+.compact-split .val .u{font-size:9px;color:var(--text3);font-weight:600;}
 
 .hero-saved{margin-top:16px;border-radius:26px;padding:20px;color:#fff;position:relative;overflow:hidden;background:linear-gradient(160deg,var(--hero-a) 0%,var(--hero-b) 100%);}
 .hero-saved::before{content:'';position:absolute;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.10);top:-90px;right:-70px;}
@@ -654,14 +617,12 @@ input[type="number"]{-moz-appearance:textfield;}
 .goal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;}
 .goal-name{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;letter-spacing:-.2px;}
 .goal-name .pills{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;}
-
 .goal-nums{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--text2);font-weight:600;margin-bottom:6px;}
 .goal-nums b{color:var(--text);font-size:15px;font-weight:800;}
 .goal-bar{height:8px;background:var(--track);border-radius:4px;overflow:hidden;margin-bottom:10px;}
 .goal-bar>div{height:100%;background:var(--accent,var(--green));border-radius:4px;}
 .goal-foot{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text2);font-weight:500;gap:6px;flex-wrap:wrap;}
 
-/* Auto pill — accent-tinted 20% bg, no badge on top */
 .auto-pill{
   display:inline-flex;align-items:center;gap:4px;
   background:color-mix(in srgb, var(--accent, var(--blue)) 20%, transparent);
@@ -669,10 +630,7 @@ input[type="number"]{-moz-appearance:textfield;}
   padding:3px 9px;border-radius:6px;
   font-size:11px;font-weight:var(--pill-weight);line-height:1;
 }
-.auto-pill::before{
-  content:'↻';font-size:13px;line-height:1;
-  display:inline-flex;align-items:center;height:13px;
-}
+.auto-pill::before{content:'↻';font-size:13px;line-height:1;display:inline-flex;align-items:center;height:13px;}
 .auto-pill.paused::before{content:none;}
 .auto-pill.paused{gap:0;}
 
