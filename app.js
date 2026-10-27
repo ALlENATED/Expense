@@ -464,9 +464,6 @@ function getColorVal(colorKey, variant) {
   return val || '';
 }
 
-/* ============================================================
-   SHEETS — base sheet + nested picker sheet
-   ============================================================ */
 function openSheet(builder) {
   const root = document.getElementById('sheet-root');
   if (!root) return;
@@ -491,167 +488,6 @@ function closeSheet() {
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
 
-/* Nested picker — stacks a second sheet without destroying the parent */
-function openNestedPicker(buildFn) {
-  const root = document.getElementById('sheet-root');
-  if (!root) return;
-
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay show';
-  overlay.style.zIndex = '85';
-
-  const sheet = document.createElement('div');
-  sheet.className = 'sheet';
-  sheet.style.zIndex = '86';
-  sheet.style.transform = 'translateY(100%)';
-
-  const grab = document.createElement('div'); grab.className = 'grab';
-  const body = document.createElement('div'); body.className = 'sheet-body';
-  const footer = document.createElement('div'); footer.className = 'sheet-footer';
-  sheet.appendChild(grab); sheet.appendChild(body); sheet.appendChild(footer);
-
-  root.appendChild(overlay); root.appendChild(sheet);
-  requestAnimationFrame(() => sheet.classList.add('show'));
-
-  function closePicker() {
-    sheet.classList.remove('show');
-    overlay.classList.remove('show');
-    setTimeout(() => {
-      try { overlay.remove(); sheet.remove(); } catch (e) {}
-    }, 250);
-  }
-
-  overlay.onclick = closePicker;
-  buildFn(body, footer, closePicker);
-}
-
-/* ============================================================
-   PICKERS — use nested sheet so parent form survives
-   ============================================================ */
-const PALETTE = [
-  'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
-  'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
-  'amber','orange','tangerine','coral','gold','mustard','apricot','peach','saffron','honey',
-  'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
-  'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
-];
-
-function openColorPickerWithSave(current, onPick) {
-  let selected = current;
-  openNestedPicker((body, footer, close) => {
-    body.innerHTML = '<h3>Pick a color</h3>';
-    const grid = document.createElement('div');
-    grid.className = 'palette-grid';
-    PALETTE.forEach(key => {
-      const chip = document.createElement('div');
-      chip.className = 'color-chip c-' + key + (key === selected ? ' on' : '');
-      chip.onclick = () => {
-        grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
-        chip.classList.add('on');
-        selected = key;
-      };
-      grid.appendChild(chip);
-    });
-    body.appendChild(grid);
-
-    footer.innerHTML = '';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Use this color';
-    saveBtn.onclick = () => { onPick(selected); close(); };
-    footer.appendChild(saveBtn);
-  });
-}
-
-const ICONS = {
-  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
-  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
-  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
-  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
-  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
-  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
-  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
-  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
-  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
-  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
-  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
-};
-
-function openIconPickerWithSave(current, onPick) {
-  let selected = current;
-  openNestedPicker((body, footer, close) => {
-    body.innerHTML = '<h3>Pick an icon</h3>';
-    const wrap = document.createElement('div');
-    wrap.className = 'icon-picker';
-
-    const search = document.createElement('input');
-    search.className = 'icon-search';
-    search.placeholder = '🔍  Search icons…';
-    wrap.appendChild(search);
-
-    const scroll = document.createElement('div');
-    function render(q) {
-      scroll.innerHTML = '';
-      const query = (q || '').toLowerCase().trim();
-      let any = false;
-      Object.entries(ICONS).forEach(([cat, list]) => {
-        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
-        if (!matches.length) return;
-        any = true;
-        const label = document.createElement('div');
-        label.className = 'icon-cat-label';
-        label.textContent = cat;
-        scroll.appendChild(label);
-        const grid = document.createElement('div');
-        grid.className = 'icon-grid';
-        matches.forEach(([emoji]) => {
-          const btn = document.createElement('button');
-          btn.className = 'icon-btn' + (emoji === selected ? ' on' : '');
-          btn.textContent = emoji;
-          btn.onclick = () => {
-            selected = emoji;
-            grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
-            btn.classList.add('on');
-          };
-          grid.appendChild(btn);
-        });
-        scroll.appendChild(grid);
-      });
-      if (!any) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
-        empty.textContent = 'No icons match "' + query + '"';
-        scroll.appendChild(empty);
-      }
-    }
-    search.oninput = () => render(search.value);
-    wrap.appendChild(scroll);
-
-    const custom = document.createElement('div');
-    custom.className = 'custom-emoji-wrap';
-    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
-    const ci = custom.querySelector('input');
-    const cb = custom.querySelector('button');
-    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
-    cb.onclick = commit;
-    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    wrap.appendChild(custom);
-
-    body.appendChild(wrap);
-
-    footer.innerHTML = '';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Use this icon';
-    saveBtn.onclick = () => { onPick(selected); close(); };
-    footer.appendChild(saveBtn);
-    render('');
-  });
-}
-
-/* ============================================================
-   THEME / PILL
-   ============================================================ */
 function applyThemeAndTone() {
   if (!App.settings || !App.userSettings) return;
   document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
@@ -674,9 +510,6 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
 });
 
-/* ============================================================
-   AVATAR / HEAD
-   ============================================================ */
 function getAvatarHtml(uid, size = '32px') {
   const members = App.settings?.members || {};
   const m = members[uid];
@@ -739,9 +572,6 @@ function makeAppHead(greeting, appName) {
   return head;
 }
 
-/* ============================================================
-   NAV
-   ============================================================ */
 function renderTabbar() {
   const nav = document.getElementById('tabbar');
   if (!nav) return;
@@ -778,9 +608,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ============================================================
-   HOME
-   ============================================================ */
+/* HOME */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -845,6 +673,7 @@ ScreenRenderers.home = function () {
       const pctRaw = limit > 0 ? Math.round((spent / limit) * 100) : 0;
       const pct = Math.min(100, pctRaw);
 
+      // Pinned: stacked icons only (no amounts)
       let pinTagsHtml = '';
       const tagUids = c.tagUids || [];
       if (tagUids.length > 0) {
@@ -925,9 +754,7 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
-/* ============================================================
-   CATEGORIES
-   ============================================================ */
+/* CATEGORIES */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -982,6 +809,7 @@ ScreenRenderers.categories = function () {
       const isPinned = myPins.includes(cat.id);
       const pinHtml = isPinned ? '<span class="pin-icon">📌</span>' : '';
 
+      // Categories screen: show amount pills next to name
       let catTagsHtml = '';
       const tagUids = cat.tagUids || [];
       const amountsByUid = cat.amountsByUid || {};
@@ -1028,9 +856,7 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* ============================================================
-   BUY
-   ============================================================ */
+/* BUY */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
@@ -1160,7 +986,7 @@ async function deleteBuyList(l) {
   toast('List deleted');
 }
 
-/* Buy list editor — pickers now nest so parent survives */
+/* Buy list editor — pickers commit icon/color directly */
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
@@ -1214,6 +1040,7 @@ function openListMenu(l) {
       );
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       closeSheet();
+      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(save);
 
@@ -1284,6 +1111,7 @@ function openNewListEditor() {
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       App.activeBuyList = newList.id;
       closeSheet();
+      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
   });
@@ -1296,9 +1124,7 @@ function toggleBuy(item) {
   });
 }
 
-/* ============================================================
-   TO PAY
-   ============================================================ */
+/* TO PAY */
 function normalizeToPayItem(item) {
   if (Array.isArray(item.tagUids) && item.tagUids.length > 0) return item;
   if (!item.tag) return item;
@@ -1417,9 +1243,7 @@ function togglePaid(item) {
   });
 }
 
-/* ============================================================
-   HISTORY
-   ============================================================ */
+/* HISTORY */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1549,9 +1373,7 @@ function computeMemberSplits(periodRow) {
   return perMember;
 }
 
-/* ============================================================
-   SAVED
-   ============================================================ */
+/* SAVED */
 function computeGoalTarget(g) {
   if (g.targetsByUid && typeof g.targetsByUid === 'object') {
     const sum = Object.values(g.targetsByUid).reduce((a, v) => a + (Number(v) || 0), 0);
@@ -1600,6 +1422,7 @@ ScreenRenderers.saved = function () {
   }
   const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
 
+  // Per-member savings before goals
   const memberSavingsBeforeGoals = {};
   Object.keys(s.members || {}).forEach(uid => {
     const member = s.members[uid];
@@ -1691,6 +1514,7 @@ ScreenRenderers.saved = function () {
         }).join('');
       }
 
+      // Footer auto-pill for current user
       let footerPill = '';
       if (tagUids.includes(myUid)) {
         const myStatus = memberStatus[myUid];
@@ -1709,6 +1533,7 @@ ScreenRenderers.saved = function () {
             esc(g.icon || '🎯') + ' ' + esc(g.name) +
             '<div class="pills">' + pillsHtml + '</div>' +
           '</div>' +
+          // NO paused badge here
         '</div>' +
         '<div class="goal-nums"><span><b>' + fmtAmount(combinedCurrent) + '</b> / ' + fmtAmount(combinedTarget) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
@@ -1756,9 +1581,7 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-/* ============================================================
-   SETTINGS
-   ============================================================ */
+/* SETTINGS */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -2095,9 +1918,7 @@ function changeTheme(theme) {
   });
 }
 
-/* ============================================================
-   MEMBER MANAGEMENT
-   ============================================================ */
+/* MEMBER MANAGEMENT */
 function confirmKickMember(uid, m) {
   const name = m.name || m.email || uid;
   if (!confirm('Kick "' + name + '" from the household?\n\nThey will be signed out and blocked from signing back in.\nTheir data stays — you can unban them later.')) return;
@@ -2166,9 +1987,7 @@ function confirmClearBanned() {
   FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
-/* ============================================================
-   PROFILE
-   ============================================================ */
+/* PROFILE */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -2263,9 +2082,7 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ============================================================
-   GOALS
-   ============================================================ */
+/* GOALS */
 function openGoalEditor() {
   const g = {
     name: '', icon: '🎯', target: 0, current: 0,
@@ -2498,6 +2315,7 @@ function showGoalSheet(g, isNew) {
       closeSheet();
       if (isNew) await FB.addDoc(goalsCol(), { ...payload, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(goalsCol(), g.id), payload);
+      if (App.screen === 'saved') renderScreen('saved');
     };
     actionsDiv.appendChild(saveBtn);
 
@@ -2518,9 +2336,7 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* ============================================================
-   CATEGORY EDITOR
-   ============================================================ */
+/* CATEGORY EDITOR — with tags, split mode, saves icon + color + split */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : {
@@ -2599,6 +2415,7 @@ function openCategoryEditor(cat) {
       colorF.className = 'field clickable c-' + key;
     });
 
+    // Split section
     const splitTitle = document.createElement('div');
     splitTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin:14px 4px 8px;';
     splitTitle.textContent = 'Who pays for this category?';
@@ -2678,6 +2495,7 @@ function openCategoryEditor(cat) {
       closeSheet();
       if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
+      if (App.screen === 'categories' || App.screen === 'home') renderScreen(App.screen);
     };
     footer.appendChild(save);
 
@@ -2693,9 +2511,129 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* ============================================================
-   OTHER PICKERS
-   ============================================================ */
+/* PICKERS — Save button inside picker works */
+const PALETTE = [
+  'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
+  'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
+  'amber','orange','tangerine','coral','gold','mustard','apricot','peach','saffron','honey',
+  'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
+  'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
+];
+
+function openColorPickerWithSave(current, onPick) {
+  let selected = current;
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>Pick a color</h3>';
+    const grid = document.createElement('div');
+    grid.className = 'palette-grid';
+    PALETTE.forEach(key => {
+      const chip = document.createElement('div');
+      chip.className = 'color-chip c-' + key + (key === selected ? ' on' : '');
+      chip.onclick = () => {
+        grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
+        chip.classList.add('on');
+        selected = key;
+      };
+      grid.appendChild(chip);
+    });
+    body.appendChild(grid);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
+    footer.appendChild(saveBtn);
+  });
+}
+
+const ICONS = {
+  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
+  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
+  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
+  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
+  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
+  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
+  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
+  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
+  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
+  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
+  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
+};
+
+function openIconPickerWithSave(current, onPick) {
+  let selected = current;
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>Pick an icon</h3>';
+    const wrap = document.createElement('div');
+    wrap.className = 'icon-picker';
+
+    const search = document.createElement('input');
+    search.className = 'icon-search';
+    search.placeholder = '🔍  Search icons…';
+    wrap.appendChild(search);
+
+    const scroll = document.createElement('div');
+    function render(q) {
+      scroll.innerHTML = '';
+      const query = (q || '').toLowerCase().trim();
+      let any = false;
+      Object.entries(ICONS).forEach(([cat, list]) => {
+        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
+        if (!matches.length) return;
+        any = true;
+        const label = document.createElement('div');
+        label.className = 'icon-cat-label';
+        label.textContent = cat;
+        scroll.appendChild(label);
+        const grid = document.createElement('div');
+        grid.className = 'icon-grid';
+        matches.forEach(([emoji]) => {
+          const btn = document.createElement('button');
+          btn.className = 'icon-btn' + (emoji === selected ? ' on' : '');
+          btn.textContent = emoji;
+          btn.onclick = () => {
+            selected = emoji;
+            grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
+            btn.classList.add('on');
+          };
+          grid.appendChild(btn);
+        });
+        scroll.appendChild(grid);
+      });
+      if (!any) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
+        empty.textContent = 'No icons match "' + query + '"';
+        scroll.appendChild(empty);
+      }
+    }
+    search.oninput = () => render(search.value);
+    wrap.appendChild(scroll);
+
+    const custom = document.createElement('div');
+    custom.className = 'custom-emoji-wrap';
+    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
+    const ci = custom.querySelector('input');
+    const cb = custom.querySelector('button');
+    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
+    cb.onclick = commit;
+    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    wrap.appendChild(custom);
+
+    body.appendChild(wrap);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
+    footer.appendChild(saveBtn);
+    render('');
+  });
+}
+
+/* TONE */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -2763,9 +2701,7 @@ function openPillColorPicker(type) {
   });
 }
 
-/* ============================================================
-   EXPENSE EDITOR
-   ============================================================ */
+/* EXPENSE EDITOR */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2841,9 +2777,7 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ============================================================
-   TO PAY EDITOR
-   ============================================================ */
+/* TO PAY EDITOR */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
@@ -3069,9 +3003,7 @@ function openToPayEditor(item) {
   });
 }
 
-/* ============================================================
-   HISTORY HELPERS
-   ============================================================ */
+/* HISTORY HELPERS */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -3100,9 +3032,7 @@ async function recomputeHistoryTotal(periodKey) {
   if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
 }
 
-/* ============================================================
-   PERIODS
-   ============================================================ */
+/* PERIODS */
 function computeCurrentPeriod(startDay) {
   startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const now = new Date();
@@ -3170,9 +3100,7 @@ function labelForDay(iso) {
   return full;
 }
 
-/* ============================================================
-   RESET
-   ============================================================ */
+/* RESET */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -3344,9 +3272,7 @@ async function applyGoalAutoContributions(monthKey) {
   }
 }
 
-/* ============================================================
-   EXPORT / IMPORT / HARD RESET
-   ============================================================ */
+/* EXPORT / IMPORT / HARD RESET */
 function exportData() {
   const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
