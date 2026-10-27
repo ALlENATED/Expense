@@ -50,6 +50,9 @@ const TABS = [
 const SCREENS = TABS.map(t => t.id);
 const ScreenRenderers = {};
 
+/* ============================================================
+   BOOT
+   ============================================================ */
 function ready(fn) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', fn, { once: true });
@@ -350,6 +353,9 @@ function detachListeners() {
   App.listeners = [];
 }
 
+/* ============================================================
+   DATES / FORMAT
+   ============================================================ */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -464,10 +470,14 @@ function getColorVal(colorKey, variant) {
   return val || '';
 }
 
+/* ============================================================
+   SHEETS — base sheet only. Pickers render as in-sheet sub-views.
+   ============================================================ */
 function openSheet(builder) {
   const root = document.getElementById('sheet-root');
   if (!root) return;
   root.innerHTML = '';
+
   const overlay = h('div', { class: 'overlay show', onclick: closeSheet });
   const sheet = h('div', { class: 'sheet' });
   const grab = h('div', { class: 'grab' });
@@ -481,13 +491,184 @@ function openSheet(builder) {
 function closeSheet() {
   const root = document.getElementById('sheet-root');
   if (!root) return;
-  const sheet = root.querySelector('.sheet');
-  const overlay = root.querySelector('.overlay');
-  if (sheet) sheet.classList.remove('show');
-  if (overlay) overlay.classList.remove('show');
+  root.querySelectorAll('.sheet, .overlay').forEach(el => el.classList.remove('show'));
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
 
+/* In-sheet sub-view used by color & icon pickers.
+   The parent form stays intact underneath — we just overlay a sub-view
+   inside the same sheet, remove it when done. */
+function openSubView(title, buildFn) {
+  const root = document.getElementById('sheet-root');
+  const sheet = root && root.querySelector('.sheet');
+  if (!sheet) return;
+
+  // Remove any existing sub-view
+  const existing = sheet.querySelector('.picker-sub');
+  if (existing) existing.remove();
+
+  const sub = document.createElement('div');
+  sub.className = 'picker-sub';
+
+  const titleBar = document.createElement('div');
+  titleBar.className = 'picker-sub-titlebar';
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'back';
+  backBtn.textContent = '‹ Back';
+  const titleEl = document.createElement('div');
+  titleEl.className = 'title';
+  titleEl.textContent = title || 'Pick';
+  titleBar.appendChild(backBtn);
+  titleBar.appendChild(titleEl);
+
+  const subBody = document.createElement('div');
+  subBody.className = 'picker-sub-body';
+  const subFooter = document.createElement('div');
+  subFooter.className = 'picker-sub-footer';
+
+  sub.appendChild(titleBar);
+  sub.appendChild(subBody);
+  sub.appendChild(subFooter);
+  sheet.appendChild(sub);
+
+  function closeSub() {
+    sub.remove();
+  }
+
+  backBtn.onclick = closeSub;
+
+  buildFn(subBody, subFooter, closeSub, titleEl);
+}
+
+/* ============================================================
+   ICONS + PALETTE (defined before pickers use them)
+   ============================================================ */
+const PALETTE = [
+  'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
+  'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
+  'amber','orange','tangerine','coral','gold','mustard','apricot','peach','saffron','honey',
+  'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
+  'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
+];
+
+const ICONS = {
+  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
+  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
+  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
+  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
+  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
+  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
+  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
+  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
+  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
+  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
+  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
+};
+
+function openColorPickerWithSave(current, onPick) {
+  let selected = current;
+  openSubView('Pick a color', (body, footer, close, titleEl) => {
+    body.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'palette-grid';
+    grid.style.marginTop = '4px';
+    PALETTE.forEach(key => {
+      const chip = document.createElement('div');
+      chip.className = 'color-chip c-' + key + (key === selected ? ' on' : '');
+      chip.onclick = () => {
+        grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
+        chip.classList.add('on');
+        selected = key;
+      };
+      grid.appendChild(chip);
+    });
+    body.appendChild(grid);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Use this color';
+    saveBtn.onclick = () => { onPick(selected); close(); };
+    footer.appendChild(saveBtn);
+  });
+}
+
+function openIconPickerWithSave(current, onPick) {
+  let selected = current;
+  openSubView('Pick an icon', (body, footer, close, titleEl) => {
+    body.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'icon-picker';
+
+    const search = document.createElement('input');
+    search.className = 'icon-search';
+    search.placeholder = '🔍  Search icons…';
+    wrap.appendChild(search);
+
+    const scroll = document.createElement('div');
+    function render(q) {
+      scroll.innerHTML = '';
+      const query = (q || '').toLowerCase().trim();
+      let any = false;
+      Object.entries(ICONS).forEach(([cat, list]) => {
+        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
+        if (!matches.length) return;
+        any = true;
+        const label = document.createElement('div');
+        label.className = 'icon-cat-label';
+        label.textContent = cat;
+        scroll.appendChild(label);
+        const grid = document.createElement('div');
+        grid.className = 'icon-grid';
+        matches.forEach(([emoji]) => {
+          const btn = document.createElement('button');
+          btn.className = 'icon-btn' + (emoji === selected ? ' on' : '');
+          btn.textContent = emoji;
+          btn.onclick = () => {
+            selected = emoji;
+            grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
+            btn.classList.add('on');
+          };
+          grid.appendChild(btn);
+        });
+        scroll.appendChild(grid);
+      });
+      if (!any) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
+        empty.textContent = 'No icons match "' + query + '"';
+        scroll.appendChild(empty);
+      }
+    }
+    search.oninput = () => render(search.value);
+    wrap.appendChild(scroll);
+
+    const custom = document.createElement('div');
+    custom.className = 'custom-emoji-wrap';
+    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
+    const ci = custom.querySelector('input');
+    const cb = custom.querySelector('button');
+    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
+    cb.onclick = commit;
+    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    wrap.appendChild(custom);
+
+    body.appendChild(wrap);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Use this icon';
+    saveBtn.onclick = () => { onPick(selected); close(); };
+    footer.appendChild(saveBtn);
+    render('');
+  });
+}
+
+/* ============================================================
+   THEME / PILL
+   ============================================================ */
 function applyThemeAndTone() {
   if (!App.settings || !App.userSettings) return;
   document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
@@ -510,6 +691,9 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
 });
 
+/* ============================================================
+   AVATAR / HEAD
+   ============================================================ */
 function getAvatarHtml(uid, size = '32px') {
   const members = App.settings?.members || {};
   const m = members[uid];
@@ -572,6 +756,9 @@ function makeAppHead(greeting, appName) {
   return head;
 }
 
+/* ============================================================
+   NAV
+   ============================================================ */
 function renderTabbar() {
   const nav = document.getElementById('tabbar');
   if (!nav) return;
@@ -608,7 +795,9 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* HOME */
+/* ============================================================
+   HOME
+   ============================================================ */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -673,7 +862,6 @@ ScreenRenderers.home = function () {
       const pctRaw = limit > 0 ? Math.round((spent / limit) * 100) : 0;
       const pct = Math.min(100, pctRaw);
 
-      // Pinned: stacked icons only (no amounts)
       let pinTagsHtml = '';
       const tagUids = c.tagUids || [];
       if (tagUids.length > 0) {
@@ -754,7 +942,9 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
-/* CATEGORIES */
+/* ============================================================
+   CATEGORIES
+   ============================================================ */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -809,7 +999,6 @@ ScreenRenderers.categories = function () {
       const isPinned = myPins.includes(cat.id);
       const pinHtml = isPinned ? '<span class="pin-icon">📌</span>' : '';
 
-      // Categories screen: show amount pills next to name
       let catTagsHtml = '';
       const tagUids = cat.tagUids || [];
       const amountsByUid = cat.amountsByUid || {};
@@ -856,7 +1045,9 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* BUY */
+/* ============================================================
+   BUY
+   ============================================================ */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
@@ -986,7 +1177,6 @@ async function deleteBuyList(l) {
   toast('List deleted');
 }
 
-/* Buy list editor — pickers commit icon/color directly */
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
@@ -1034,13 +1224,17 @@ function openListMenu(l) {
     save.textContent = 'Save';
     save.onclick = async () => {
       const newName = document.getElementById('lm-name').value.trim();
-      if (!newName) return;
+      if (!newName) { toast('Name required'); return; }
       const lists = App.settings.buyLists.map(x =>
         x.id === l.id ? { ...x, name: newName, colorKey: editing.colorKey, icon: editing.icon } : x
       );
-      await FB.updateDoc(budgetDoc(), { buyLists: lists });
-      closeSheet();
-      if (App.screen === 'buy') renderScreen('buy');
+      try {
+        await FB.updateDoc(budgetDoc(), { buyLists: lists });
+        closeSheet();
+      } catch (e) {
+        console.error('save list failed:', e);
+        toast('Save failed: ' + e.message);
+      }
     };
     footer.appendChild(save);
 
@@ -1099,7 +1293,7 @@ function openNewListEditor() {
     btn.textContent = 'Create List';
     btn.onclick = async () => {
       const name = document.getElementById('nl-name').value.trim();
-      if (!name) return;
+      if (!name) { toast('Name required'); return; }
       const lists = (App.settings.buyLists || []).slice();
       const newList = {
         id: 'list_' + Date.now(),
@@ -1108,10 +1302,14 @@ function openNewListEditor() {
         icon: editing.icon
       };
       lists.push(newList);
-      await FB.updateDoc(budgetDoc(), { buyLists: lists });
-      App.activeBuyList = newList.id;
-      closeSheet();
-      if (App.screen === 'buy') renderScreen('buy');
+      try {
+        await FB.updateDoc(budgetDoc(), { buyLists: lists });
+        App.activeBuyList = newList.id;
+        closeSheet();
+      } catch (e) {
+        console.error('create list failed:', e);
+        toast('Save failed: ' + e.message);
+      }
     };
     footer.appendChild(btn);
   });
@@ -1121,10 +1319,12 @@ function toggleBuy(item) {
   FB.updateDoc(FB.doc(buyCol(), item.id), {
     checked: !item.checked,
     checkedAt: !item.checked ? new Date().toISOString() : null,
-  });
+  }).catch(e => console.error('toggle buy:', e));
 }
 
-/* TO PAY */
+/* ============================================================
+   TO PAY
+   ============================================================ */
 function normalizeToPayItem(item) {
   if (Array.isArray(item.tagUids) && item.tagUids.length > 0) return item;
   if (!item.tag) return item;
@@ -1240,10 +1440,12 @@ function togglePaid(item) {
   FB.updateDoc(FB.doc(toPayCol(), item.id), {
     paid: !item.paid,
     paidDate: !item.paid ? new Date().toISOString() : null,
-  });
+  }).catch(e => console.error('toggle paid:', e));
 }
 
-/* HISTORY */
+/* ============================================================
+   HISTORY
+   ============================================================ */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1323,7 +1525,9 @@ ScreenRenderers.history = function () {
         const label = el.getAttribute('data-label');
         if (!confirm('Delete the history record for "' + label + '"?\n\nThis removes the monthly snapshot.\nExpenses are NOT deleted.')) return;
         if (!confirm('Are you absolutely sure?\n\nThis cannot be undone.')) return;
-        FB.deleteDoc(FB.doc(historyCol(), id)).then(() => toast('History entry deleted'));
+        FB.deleteDoc(FB.doc(historyCol(), id))
+          .then(() => toast('History entry deleted'))
+          .catch(e => { console.error(e); toast('Delete failed'); });
       };
     });
   }, 0);
@@ -1373,7 +1577,9 @@ function computeMemberSplits(periodRow) {
   return perMember;
 }
 
-/* SAVED */
+/* ============================================================
+   SAVED
+   ============================================================ */
 function computeGoalTarget(g) {
   if (g.targetsByUid && typeof g.targetsByUid === 'object') {
     const sum = Object.values(g.targetsByUid).reduce((a, v) => a + (Number(v) || 0), 0);
@@ -1422,7 +1628,6 @@ ScreenRenderers.saved = function () {
   }
   const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
 
-  // Per-member savings before goals
   const memberSavingsBeforeGoals = {};
   Object.keys(s.members || {}).forEach(uid => {
     const member = s.members[uid];
@@ -1514,7 +1719,6 @@ ScreenRenderers.saved = function () {
         }).join('');
       }
 
-      // Footer auto-pill for current user
       let footerPill = '';
       if (tagUids.includes(myUid)) {
         const myStatus = memberStatus[myUid];
@@ -1533,7 +1737,6 @@ ScreenRenderers.saved = function () {
             esc(g.icon || '🎯') + ' ' + esc(g.name) +
             '<div class="pills">' + pillsHtml + '</div>' +
           '</div>' +
-          // NO paused badge here
         '</div>' +
         '<div class="goal-nums"><span><b>' + fmtAmount(combinedCurrent) + '</b> / ' + fmtAmount(combinedTarget) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
@@ -1581,7 +1784,9 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-/* SETTINGS */
+/* ============================================================
+   SETTINGS
+   ============================================================ */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1903,10 +2108,14 @@ function bindInput(id, onCommit) {
   el.addEventListener('blur', () => onCommit(el.value));
   el.addEventListener('keydown', ev => { if (ev.key === 'Enter') el.blur(); });
 }
-function saveSetting(key, value) { FB.updateDoc(budgetDoc(), { [key]: value }); }
+function saveSetting(key, value) {
+  FB.updateDoc(budgetDoc(), { [key]: value })
+    .catch(e => { console.error('save setting ' + key + ':', e); toast('Save failed: ' + e.message); });
+}
 function updateUserSetting(key, value) {
   if (!App.user) return;
-  FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.' + key]: value });
+  FB.updateDoc(budgetDoc(), { ['members.' + App.user.uid + '.' + key]: value })
+    .catch(e => { console.error('update user setting ' + key + ':', e); toast('Save failed: ' + e.message); });
 }
 function changeTheme(theme) {
   updateUserSetting('theme', theme);
@@ -1918,7 +2127,9 @@ function changeTheme(theme) {
   });
 }
 
-/* MEMBER MANAGEMENT */
+/* ============================================================
+   MEMBER MANAGEMENT
+   ============================================================ */
 function confirmKickMember(uid, m) {
   const name = m.name || m.email || uid;
   if (!confirm('Kick "' + name + '" from the household?\n\nThey will be signed out and blocked from signing back in.\nTheir data stays — you can unban them later.')) return;
@@ -1987,7 +2198,9 @@ function confirmClearBanned() {
   FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
-/* PROFILE */
+/* ============================================================
+   PROFILE
+   ============================================================ */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -2082,7 +2295,9 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* GOALS */
+/* ============================================================
+   GOALS
+   ============================================================ */
 function openGoalEditor() {
   const g = {
     name: '', icon: '🎯', target: 0, current: 0,
@@ -2312,10 +2527,14 @@ function showGoalSheet(g, isNew) {
         target: comb,
         current: Object.values(editing.currentByUid).reduce((a, v) => a + (Number(v) || 0), 0)
       };
-      closeSheet();
-      if (isNew) await FB.addDoc(goalsCol(), { ...payload, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(goalsCol(), g.id), payload);
-      if (App.screen === 'saved') renderScreen('saved');
+      try {
+        if (isNew) await FB.addDoc(goalsCol(), { ...payload, createdAt: new Date().toISOString() });
+        else await FB.updateDoc(FB.doc(goalsCol(), g.id), payload);
+        closeSheet();
+      } catch (e) {
+        console.error('save goal failed:', e);
+        toast('Save failed: ' + e.message);
+      }
     };
     actionsDiv.appendChild(saveBtn);
 
@@ -2336,7 +2555,9 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* CATEGORY EDITOR — with tags, split mode, saves icon + color + split */
+/* ============================================================
+   CATEGORY EDITOR
+   ============================================================ */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : {
@@ -2415,7 +2636,6 @@ function openCategoryEditor(cat) {
       colorF.className = 'field clickable c-' + key;
     });
 
-    // Split section
     const splitTitle = document.createElement('div');
     splitTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin:14px 4px 8px;';
     splitTitle.textContent = 'Who pays for this category?';
@@ -2492,10 +2712,14 @@ function openCategoryEditor(cat) {
         amountsByUid: cleanAmounts,
         splitMode: editing.splitMode
       };
-      closeSheet();
-      if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
-      if (App.screen === 'categories' || App.screen === 'home') renderScreen(App.screen);
+      try {
+        if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
+        else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
+        closeSheet();
+      } catch (e) {
+        console.error('save category failed:', e);
+        toast('Save failed: ' + e.message);
+      }
     };
     footer.appendChild(save);
 
@@ -2511,129 +2735,9 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* PICKERS — Save button inside picker works */
-const PALETTE = [
-  'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
-  'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
-  'amber','orange','tangerine','coral','gold','mustard','apricot','peach','saffron','honey',
-  'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
-  'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
-];
-
-function openColorPickerWithSave(current, onPick) {
-  let selected = current;
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>Pick a color</h3>';
-    const grid = document.createElement('div');
-    grid.className = 'palette-grid';
-    PALETTE.forEach(key => {
-      const chip = document.createElement('div');
-      chip.className = 'color-chip c-' + key + (key === selected ? ' on' : '');
-      chip.onclick = () => {
-        grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
-        chip.classList.add('on');
-        selected = key;
-      };
-      grid.appendChild(chip);
-    });
-    body.appendChild(grid);
-
-    footer.innerHTML = '';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
-    footer.appendChild(saveBtn);
-  });
-}
-
-const ICONS = {
-  'Food & Drink': [['🛒','cart'],['🥦','broccoli'],['🍞','bread'],['🥩','meat'],['🐟','fish'],['🍎','apple'],['☕','coffee'],['🍽️','plate'],['🍔','burger'],['🍕','pizza'],['🍜','noodles'],['🍰','cake'],['🍷','wine'],['🍺','beer'],['🥤','soda'],['🧃','juice'],['🍬','candy'],['🍦','ice cream']],
-  'Candy & Sweets': [['🍬','candy'],['🍭','lollipop'],['🍫','chocolate'],['🍩','donut'],['🍪','cookie'],['🧁','cupcake'],['🍰','cake'],['🍦','ice cream'],['🍨','ice cream'],['🍧','shaved ice'],['🍿','popcorn'],['🍯','honey']],
-  'Home': [['🏠','home'],['💡','light'],['🔌','plug'],['🔥','fire'],['💧','water'],['🚿','shower'],['🧻','paper'],['🧹','broom'],['🛋️','sofa'],['🛏️','bed'],['📺','tv'],['🌐','internet'],['📶','wifi'],['🗑️','trash'],['🧰','toolbox'],['🔧','wrench']],
-  'Transport': [['🚌','bus'],['🚇','metro'],['🚕','taxi'],['🚗','car'],['⛽','gas'],['🅿️','parking'],['🚲','bike'],['🛴','scooter'],['✈️','plane'],['🚆','train'],['🛵','motorcycle'],['⛴️','ferry'],['🎫','ticket'],['🗺️','map'],['🚏','bus stop'],['🛣️','highway']],
-  'Health': [['💊','pill'],['🩺','stethoscope'],['🏥','hospital'],['💉','syringe'],['🧴','lotion'],['🪥','toothbrush'],['🩹','bandage'],['🧘','yoga'],['🏋️','gym'],['🏃','run'],['🚴','cycle'],['🩸','blood'],['🫀','heart'],['🧠','brain'],['🦷','tooth'],['👁️','eye']],
-  'Entertainment': [['🎬','movie'],['🎮','game'],['🎵','music'],['🎤','microphone'],['🎭','theater'],['🎨','art'],['📚','books'],['🎧','headphones'],['🎲','dice'],['🏖️','beach'],['🎢','rollercoaster'],['🎯','target'],['🎳','bowling'],['🎪','circus'],['🏕️','camping'],['🎸','guitar']],
-  'Shopping': [['🛍️','shopping'],['👕','shirt'],['👗','dress'],['👟','shoe'],['💄','lipstick'],['💇','haircut'],['🧴','shampoo'],['👓','glasses'],['👜','handbag'],['💍','ring'],['🕶️','sunglasses'],['🎁','gift'],['🎀','ribbon'],['🧸','teddy'],['💐','flowers'],['🛏️','bedroom']],
-  'Family & Pets': [['👶','baby'],['🧒','child'],['👨‍👩‍👧','family'],['🐶','dog'],['🐱','cat'],['🐾','paw'],['🦴','bone'],['🐠','fish'],['🐦','bird'],['🐹','hamster'],['🌱','seedling'],['🪴','plant'],['🌸','flower'],['🌳','tree'],['🧑‍🍼','parent'],['❤️','heart']],
-  'Money': [['💳','credit card'],['💰','money'],['🏦','bank'],['💸','expense'],['📊','chart'],['🧾','receipt'],['📄','paper'],['📝','note'],['🗂️','folders'],['🔒','lock'],['🏷️','tag'],['⚖️','balance'],['🪙','coin'],['💵','dollar'],['📮','mailbox'],['🏢','office']],
-  'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
-  'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
-};
-
-function openIconPickerWithSave(current, onPick) {
-  let selected = current;
-  openSheet((body, footer) => {
-    body.innerHTML = '<h3>Pick an icon</h3>';
-    const wrap = document.createElement('div');
-    wrap.className = 'icon-picker';
-
-    const search = document.createElement('input');
-    search.className = 'icon-search';
-    search.placeholder = '🔍  Search icons…';
-    wrap.appendChild(search);
-
-    const scroll = document.createElement('div');
-    function render(q) {
-      scroll.innerHTML = '';
-      const query = (q || '').toLowerCase().trim();
-      let any = false;
-      Object.entries(ICONS).forEach(([cat, list]) => {
-        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
-        if (!matches.length) return;
-        any = true;
-        const label = document.createElement('div');
-        label.className = 'icon-cat-label';
-        label.textContent = cat;
-        scroll.appendChild(label);
-        const grid = document.createElement('div');
-        grid.className = 'icon-grid';
-        matches.forEach(([emoji]) => {
-          const btn = document.createElement('button');
-          btn.className = 'icon-btn' + (emoji === selected ? ' on' : '');
-          btn.textContent = emoji;
-          btn.onclick = () => {
-            selected = emoji;
-            grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
-            btn.classList.add('on');
-          };
-          grid.appendChild(btn);
-        });
-        scroll.appendChild(grid);
-      });
-      if (!any) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
-        empty.textContent = 'No icons match "' + query + '"';
-        scroll.appendChild(empty);
-      }
-    }
-    search.oninput = () => render(search.value);
-    wrap.appendChild(scroll);
-
-    const custom = document.createElement('div');
-    custom.className = 'custom-emoji-wrap';
-    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
-    const ci = custom.querySelector('input');
-    const cb = custom.querySelector('button');
-    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
-    cb.onclick = commit;
-    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    wrap.appendChild(custom);
-
-    body.appendChild(wrap);
-
-    footer.innerHTML = '';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'primary';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
-    footer.appendChild(saveBtn);
-    render('');
-  });
-}
-
-/* TONE */
+/* ============================================================
+   TONE / PILL COLOR PICKERS
+   ============================================================ */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -2701,7 +2805,9 @@ function openPillColorPicker(type) {
   });
 }
 
-/* EXPENSE EDITOR */
+/* ============================================================
+   EXPENSE EDITOR
+   ============================================================ */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2752,14 +2858,19 @@ function openExpenseEditor(expense, prefillName) {
       if (!name) { toast('Name required'); return; }
       if (!amount || amount <= 0) { toast('Amount must be > 0'); return; }
       if (!chosenCat) { toast('Pick a category'); return; }
-      closeSheet();
-      if (isNew) {
-        const periodKey = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay).key;
-        await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey });
-        await syncCurrentHistoryBudget();
-      } else {
-        await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat, subcategoryId: working.subcategoryId || '' });
-        await recomputeHistoryTotal(expense.periodKey);
+      try {
+        if (isNew) {
+          const periodKey = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay).key;
+          await FB.addDoc(expensesCol(), { name, amount, categoryId: chosenCat, subcategoryId: '', dateAdded: new Date().toISOString(), periodKey });
+          await syncCurrentHistoryBudget();
+        } else {
+          await FB.updateDoc(FB.doc(expensesCol(), expense.id), { name, amount, categoryId: chosenCat, subcategoryId: working.subcategoryId || '' });
+          await recomputeHistoryTotal(expense.periodKey);
+        }
+        closeSheet();
+      } catch (e) {
+        console.error('save expense failed:', e);
+        toast('Save failed: ' + e.message);
       }
     };
     footer.appendChild(save);
@@ -2777,7 +2888,9 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* TO PAY EDITOR */
+/* ============================================================
+   TO PAY EDITOR
+   ============================================================ */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
@@ -2985,9 +3098,14 @@ function openToPayEditor(item) {
         tagUids: currentTagUids,
         amountsByUid: cleanAmounts
       };
-      closeSheet();
-      if (isNew) await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
-      else await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
+      try {
+        if (isNew) await FB.addDoc(toPayCol(), { ...data, paid: false, paidDate: null, createdAt: new Date().toISOString() });
+        else await FB.updateDoc(FB.doc(toPayCol(), item.id), data);
+        closeSheet();
+      } catch (e) {
+        console.error('save topay failed:', e);
+        toast('Save failed: ' + e.message);
+      }
     };
     footer.appendChild(save);
 
@@ -3003,7 +3121,9 @@ function openToPayEditor(item) {
   });
 }
 
-/* HISTORY HELPERS */
+/* ============================================================
+   HISTORY HELPERS
+   ============================================================ */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -3032,7 +3152,9 @@ async function recomputeHistoryTotal(periodKey) {
   if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
 }
 
-/* PERIODS */
+/* ============================================================
+   PERIODS
+   ============================================================ */
 function computeCurrentPeriod(startDay) {
   startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const now = new Date();
@@ -3052,7 +3174,7 @@ function computeCurrentPeriod(startDay) {
   const daysTotal = Math.round((endDate - startDate) / msPerDay) + 1;
   const todayMidnight = new Date(y, m, d);
   const daysLeft = Math.max(0, Math.round((endDate - todayMidnight) / msPerDay));
-  return { key, year: startDate.getFullYear(), start: startDate.toISOString(), end: endDate.toISOString(), label, daysTotal, daysLeft };
+  return { key, year: startDate.getFullYear(), start: localDateString(startDate), end: localDateString(endDate), label, daysTotal, daysLeft };
 }
 function computePreviousPeriod(currentPeriod) {
   const d = parseLocalDate(currentPeriod.start);
@@ -3074,8 +3196,8 @@ function computeCurrentPeriodForDate(date, startDay) {
   return {
     key: pad2(startDate.getFullYear()) + '-' + pad2(startDate.getMonth() + 1),
     year: startDate.getFullYear(),
-    start: startDate.toISOString(),
-    end: endDate.toISOString(),
+    start: localDateString(startDate),
+    end: localDateString(endDate),
     label: formatPeriodLabel(startDate, endDate)
   };
 }
@@ -3100,7 +3222,9 @@ function labelForDay(iso) {
   return full;
 }
 
-/* RESET */
+/* ============================================================
+   RESET
+   ============================================================ */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -3272,7 +3396,9 @@ async function applyGoalAutoContributions(monthKey) {
   }
 }
 
-/* EXPORT / IMPORT / HARD RESET */
+/* ============================================================
+   EXPORT / IMPORT / HARD RESET
+   ============================================================ */
 function exportData() {
   const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3302,7 +3428,8 @@ function importData() {
         for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
         const preserved = {
           owners: (App.settings && App.settings.owners) || [],
-          bannedUids: (App.settings && App.settings.bannedUids) || []
+          bannedUids: (App.settings && App.settings.bannedUids) || [],
+          lastResetKey: (App.settings && App.settings.lastResetKey) || null
         };
         await FB.setDoc(budgetDoc(), { ...(data.settings || {}), ...preserved });
         for (const c of (data.categories || [])) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
