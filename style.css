@@ -500,6 +500,14 @@ input[type="number"]{-moz-appearance:textfield;}
 .ppl-badge-inline .av{width:20px;height:20px;font-size:9px;border:none;margin:0;flex-shrink:0;}
 .ppl-badge-inline.no-amt{padding:0;background:transparent;}
 .ppl-badge-inline.no-amt .av{width:20px;height:20px;font-size:9px;}
+.ppl-badge-inline.pill-type-sub  { background: var(--pill-sub-bg);  color: var(--pill-sub-cl); }
+.ppl-badge-inline.pill-type-rep  { background: var(--pill-rep-bg);  color: var(--pill-rep-cl); }
+.ppl-badge-inline.pill-type-debt { background: var(--pill-debt-bg); color: var(--pill-debt-cl); }
+.ppl-badge-inline.no-amt.pill-type-sub,
+.ppl-badge-inline.no-amt.pill-type-rep,
+.ppl-badge-inline.no-amt.pill-type-debt { background: transparent; color: inherit; 
+}
+
 
 .pause-icon-plain{
   display:inline-flex;align-items:center;justify-content:center;

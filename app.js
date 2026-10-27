@@ -456,18 +456,25 @@ function toast(message) {
   clearTimeout(App.toastTimer);
   App.toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
+let _paletteCache = null;
 function getColorVal(colorKey, variant) {
   if (!colorKey) return '';
+  if (!_paletteCache) _paletteCache = {};
+  const cacheKey = colorKey + '|' + variant;
+  if (_paletteCache[cacheKey] !== undefined) return _paletteCache[cacheKey];
+
   const el = document.createElement('div');
   el.className = 'c-' + colorKey;
-  el.style.display = 'none';
+  el.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;';
   document.body.appendChild(el);
   const cs = getComputedStyle(el);
-  const val = variant === 'soft'
-    ? cs.getPropertyValue('--cat-soft').trim()
-    : cs.getPropertyValue('--cat').trim();
+  const val = (variant === 'soft'
+    ? cs.getPropertyValue('--cat-soft')
+    : cs.getPropertyValue('--cat')).trim();
   document.body.removeChild(el);
-  return val || '';
+
+  _paletteCache[cacheKey] = val || '';
+  return _paletteCache[cacheKey];
 }
 
 /* ============================================================
@@ -671,6 +678,7 @@ function openIconPickerWithSave(current, onPick) {
    ============================================================ */
 function applyThemeAndTone() {
   if (!App.settings || !App.userSettings) return;
+  _paletteCache = null;
   document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
   let theme = App.userSettings.theme || 'system';
   if (theme === 'system')
@@ -1338,6 +1346,11 @@ function normalizeToPayItem(item) {
     tagUids = members.filter(u => u === myUid || u === otherUid);
     if (tagUids.length === 0) tagUids = members.slice(0, 2);
   }
+  // Persist the migration once so legacy docs become canonical.
+  if (tagUids.length > 0 && item.id) {
+    FB.updateDoc(FB.doc(toPayCol(), item.id), { tagUids })
+      .catch(e => console.error('normalize tagUids:', e));
+  }
   return { ...item, tagUids };
 }
 
@@ -1394,18 +1407,22 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
-      let badgesHtml = '';
+           let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
+      const typeCls = item.isSubscription ? 'pill-type-sub'
+                    : item.isRepeat       ? 'pill-type-rep'
+                    : item.isDebt         ? 'pill-type-debt'
+                    : '';
       if (tagUids.length > 0) {
         badgesHtml = tagUids.map(uid => {
           const av = getAvatarHtml(uid, '20px');
           const rawAmt = amountsByUid[uid];
           const hasAmt = rawAmt != null && rawAmt !== '' && Number(rawAmt) > 0;
-          if (hasAmt) {
-            return '<span class="ppl-badge-inline">' + av + fmtAmount(rawAmt) + '</span>';
-          }
-          return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
+          const cls = 'ppl-badge-inline'
+            + (hasAmt ? '' : ' no-amt')
+            + (typeCls ? ' ' + typeCls : '');
+          return '<span class="' + cls + '">' + av + (hasAmt ? fmtAmount(rawAmt) : '') + '</span>';
         }).join('');
       }
 
@@ -1505,11 +1522,10 @@ ScreenRenderers.history = function () {
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
-        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
-        '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month\'s record ›</div>';
-      wrap.appendChild(card);
-    });
-  }
+         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
+        (r.periodKey === computeCurrentPeriod(s.periodStartDay).key
+          ? '<div class="delete-row" style="color:var(--text3);opacity:.6;cursor:default;">Current period · auto-managed</div>'
+          : '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month\'s record ›</div>');
 
   setTimeout(() => {
     const prev = document.getElementById('hist-prev');
@@ -2323,9 +2339,9 @@ function showGoalSheet(g, isNew) {
       monthlySplit: {}
     };
 
-    const members = Object.keys(App.settings?.members || {});
-    const myUid = App.user.uid;
-    const memberList = members.map(uid => ({ uid, name: displayName(uid), isMe: uid === myUid }));
+       const members = Object.keys(App.settings?.members || {});
+    const myUid = App.user?.uid;
+    if (!myUid) { toast('Session expired'); closeSheet(); return; }
 
     if (Object.keys(g.targetsByUid || {}).length > 0) editing.targetsByUid = { ...g.targetsByUid };
     else if (g.target && editing.tagUids.length > 0) {
@@ -3292,9 +3308,19 @@ function openResetDayPicker() {
     footer.appendChild(save);
   });
 }
-function confirmRunReset() {
+async function confirmRunReset() {
   if (!confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.')) return;
-  runToPayReset().then(() => toast('To Pay reset ran'));
+  const today = new Date();
+  const resetKey = today.getFullYear() + '-' + pad2(today.getMonth() + 1);
+  try {
+    await runToPayReset();
+    await applyGoalAutoContributions(resetKey);
+    await FB.updateDoc(budgetDoc(), { lastResetKey: resetKey });
+    toast('To Pay reset ran');
+  } catch (e) {
+    console.error('manual reset:', e);
+    toast('Reset failed: ' + e.message);
+  }
 }
 async function runToPayReset() {
   const today = new Date();
