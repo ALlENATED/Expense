@@ -50,9 +50,7 @@ const TABS = [
 const SCREENS = TABS.map(t => t.id);
 const ScreenRenderers = {};
 
-/* ============================================================
-   BOOT — DOM ready guard
-   ============================================================ */
+/* BOOT */
 function ready(fn) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', fn, { once: true });
@@ -179,9 +177,6 @@ function signedOut() {
   closeSheet();
 }
 
-/* ============================================================
-   FIRESTORE REFS
-   ============================================================ */
 const budgetDoc     = () => FB.doc(FB.db, 'budgets', BUDGET_ID);
 const categoriesCol = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'categories');
 const expensesCol   = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'expenses');
@@ -190,9 +185,6 @@ const buyCol        = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'buy');
 const historyCol    = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'history');
 const goalsCol      = () => FB.collection(FB.db, 'budgets', BUDGET_ID, 'goals');
 
-/* ============================================================
-   BOOT
-   ============================================================ */
 async function startApp() {
   detachListeners();
   try {
@@ -282,9 +274,6 @@ async function migrateUserSettings() {
   if (changed) await FB.updateDoc(budgetDoc(), updates);
 }
 
-/* ============================================================
-   LISTENERS
-   ============================================================ */
 function attachListeners() {
   const fail = (n) => (e) => console.error('listener ' + n + ':', e);
 
@@ -309,7 +298,6 @@ function attachListeners() {
         maybeAutoReset();
         syncCurrentHistoryBudget();
       }
-      // Members change (name/avatar) → re-render all screens that show avatars
       if (['home','categories','settings','saved','buy','topay','history'].includes(App.screen)) {
         renderScreen(App.screen);
       }
@@ -363,9 +351,6 @@ function detachListeners() {
   App.listeners = [];
 }
 
-/* ============================================================
-   DATES / FORMAT
-   ============================================================ */
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -434,9 +419,6 @@ function autoSlashDate(el) {
   el.value = out;
 }
 
-/* ============================================================
-   UTILS
-   ============================================================ */
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -483,9 +465,6 @@ function getColorVal(colorKey, variant) {
   return val || '';
 }
 
-/* ============================================================
-   SHEET
-   ============================================================ */
 function openSheet(builder) {
   const root = document.getElementById('sheet-root');
   if (!root) return;
@@ -510,9 +489,6 @@ function closeSheet() {
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
 
-/* ============================================================
-   THEME / PILL COLORS
-   ============================================================ */
 function applyThemeAndTone() {
   if (!App.settings || !App.userSettings) return;
   document.body.setAttribute('data-tone', App.userSettings.heroTone || 'forest');
@@ -523,7 +499,7 @@ function applyThemeAndTone() {
 }
 function applyPillColors() {
   if (!App.settings) return;
-  const defaults = { sub: 'blue', rep: 'purple', debt: 'red' }; // NO pin
+  const defaults = { sub: 'blue', rep: 'purple', debt: 'red' };
   const pc = Object.assign(defaults, App.settings.pillColors || {});
   const root = document.documentElement;
   ['sub','rep','debt'].forEach(type => {
@@ -535,9 +511,6 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
   if (App.userSettings && App.userSettings.theme === 'system') applyThemeAndTone();
 });
 
-/* ============================================================
-   AVATAR
-   ============================================================ */
 function getAvatarHtml(uid, size = '32px') {
   const members = App.settings?.members || {};
   const m = members[uid];
@@ -571,7 +544,6 @@ function makeAppHead(greeting, appName) {
   const currentUid = App.user && App.user.uid;
   const gradients = ['av-a','av-b','av-c'];
 
-  // Me is ALWAYS last (rightmost) — with highest z-index
   const list = Object.entries(members)
     .filter(([uid]) => !(App.settings?.bannedUids || []).includes(uid))
     .map(([uid, info]) => ({ uid, ...info, isMe: uid === currentUid }))
@@ -601,9 +573,6 @@ function makeAppHead(greeting, appName) {
   return head;
 }
 
-/* ============================================================
-   NAV
-   ============================================================ */
 function renderTabbar() {
   const nav = document.getElementById('tabbar');
   if (!nav) return;
@@ -640,9 +609,7 @@ function goScreen(id) {
   if (fab) fab.classList.toggle('show', id === 'home' || id === 'topay');
 }
 
-/* ============================================================
-   HOME
-   ============================================================ */
+/* HOME */
 ScreenRenderers.home = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -774,9 +741,7 @@ ScreenRenderers.home = function () {
   return wrap;
 };
 
-/* ============================================================
-   CATEGORIES
-   ============================================================ */
+/* CATEGORIES */
 ScreenRenderers.categories = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -860,9 +825,7 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* ============================================================
-   BUY — Layout 2 (chips + action bar below)
-   ============================================================ */
+/* BUY — layout 2 */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
@@ -881,7 +844,6 @@ ScreenRenderers.buy = function () {
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Shopping list,', 'Buy'));
 
-  // Chips
   const selector = document.createElement('div');
   selector.className = 'list-selector';
   lists.forEach(l => {
@@ -890,8 +852,6 @@ ScreenRenderers.buy = function () {
     chip.className = 'buy-chip c-' + colorKey + (l.id === currentListId ? ' active' : '');
     chip.innerHTML = '<span>' + esc(l.icon || '🛒') + '</span><span>' + esc(l.name) + '</span>';
     chip.onclick = () => { App.activeBuyList = l.id; renderScreen('buy'); };
-
-    // Double-tap to edit
     let lastTap = 0;
     chip.ondblclick = () => openListMenu(l);
     chip.addEventListener('touchend', (e) => {
@@ -908,7 +868,6 @@ ScreenRenderers.buy = function () {
   selector.appendChild(addChip);
   wrap.appendChild(selector);
 
-  // Action bar (edit/delete active list)
   const actionBar = document.createElement('div');
   actionBar.className = 'buy-action-bar';
   actionBar.innerHTML =
@@ -921,7 +880,6 @@ ScreenRenderers.buy = function () {
   };
   wrap.appendChild(actionBar);
 
-  // Add item row
   const row = document.createElement('div');
   row.className = 'buy-input-row';
   row.innerHTML = '<input placeholder="Add item…" id="buy-input"><button id="buy-add">Add</button>';
@@ -997,6 +955,7 @@ async function deleteBuyList(l) {
   toast('List deleted');
 }
 
+/* Buy list editor — tappable icon/color with sub-sheet pickers + floating Save */
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
@@ -1012,37 +971,30 @@ function openListMenu(l) {
     body.appendChild(nameF);
 
     const iconF = document.createElement('div');
-    iconF.className = 'field';
-    iconF.style.cursor = 'pointer';
+    iconF.className = 'field clickable';
     iconF.innerHTML = '<label>Icon</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<span id="lm-icon-val" style="font-size:20px;">' + esc(editing.icon) + '</span>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(iconF);
+    iconF.onclick = () => openIconPickerWithSave(editing.icon, (emoji) => {
+      editing.icon = emoji;
+      document.getElementById('lm-icon-val').textContent = emoji;
+    });
 
     const colorF = document.createElement('div');
-    colorF.className = 'field c-' + editing.colorKey;
-    colorF.style.cursor = 'pointer';
+    colorF.className = 'field clickable c-' + editing.colorKey;
     colorF.innerHTML = '<label>Color</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<div class="color-swatch"></div>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(colorF);
-
-    iconF.onclick = () => {
-      buildIconPickerInline(editing.icon, (emoji) => {
-        editing.icon = emoji;
-        document.getElementById('lm-icon-val').textContent = emoji;
-      });
-    };
-    colorF.onclick = () => {
-      openColorPicker(editing.colorKey, (key) => {
-        editing.colorKey = key;
-        colorF.className = 'field c-' + key;
-      });
-    };
+    colorF.onclick = () => openColorPickerWithSave(editing.colorKey, (key) => {
+      editing.colorKey = key;
+      colorF.className = 'field clickable c-' + key;
+    });
 
     footer.innerHTML = '';
     const save = document.createElement('button');
@@ -1082,37 +1034,30 @@ function openNewListEditor() {
     body.appendChild(nameF);
 
     const iconF = document.createElement('div');
-    iconF.className = 'field';
-    iconF.style.cursor = 'pointer';
+    iconF.className = 'field clickable';
     iconF.innerHTML = '<label>Icon</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<span id="nl-icon-val" style="font-size:20px;">' + editing.icon + '</span>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(iconF);
+    iconF.onclick = () => openIconPickerWithSave(editing.icon, (emoji) => {
+      editing.icon = emoji;
+      document.getElementById('nl-icon-val').textContent = emoji;
+    });
 
     const colorF = document.createElement('div');
-    colorF.className = 'field c-' + editing.colorKey;
-    colorF.style.cursor = 'pointer';
+    colorF.className = 'field clickable c-' + editing.colorKey;
     colorF.innerHTML = '<label>Color</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<div class="color-swatch"></div>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(colorF);
-
-    iconF.onclick = () => {
-      buildIconPickerInline(editing.icon, (emoji) => {
-        editing.icon = emoji;
-        document.getElementById('nl-icon-val').textContent = emoji;
-      });
-    };
-    colorF.onclick = () => {
-      openColorPicker(editing.colorKey, (key) => {
-        editing.colorKey = key;
-        colorF.className = 'field c-' + key;
-      });
-    };
+    colorF.onclick = () => openColorPickerWithSave(editing.colorKey, (key) => {
+      editing.colorKey = key;
+      colorF.className = 'field clickable c-' + key;
+    });
 
     footer.innerHTML = '';
     const btn = document.createElement('button');
@@ -1144,9 +1089,7 @@ function toggleBuy(item) {
   });
 }
 
-/* ============================================================
-   TO PAY — layout matching picture 2
-   ============================================================ */
+/* TO PAY */
 function normalizeToPayItem(item) {
   if (Array.isArray(item.tagUids) && item.tagUids.length > 0) return item;
   if (!item.tag) return item;
@@ -1216,7 +1159,6 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
-      // Per-person pills next to name
       let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
@@ -1228,8 +1170,7 @@ ScreenRenderers.topay = function () {
           if (hasAmt) {
             return '<span class="ppl-badge-inline">' + av + fmtAmount(rawAmt) + '</span>';
           }
-          // No amount → bare avatar
-          return '<span class="ppl-avatar-inline">' + getAvatarHtml(uid, '18px') + '</span>';
+          return '<span class="ppl-badge-inline">' + getAvatarHtml(uid, '16px') + '</span>';
         }).join('');
       }
 
@@ -1267,9 +1208,7 @@ function togglePaid(item) {
   });
 }
 
-/* ============================================================
-   HISTORY
-   ============================================================ */
+/* HISTORY */
 ScreenRenderers.history = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1399,14 +1338,67 @@ function computeMemberSplits(periodRow) {
   return perMember;
 }
 
-/* ============================================================
-   SAVED
-   ============================================================ */
+/* SAVED */
+function computeGoalTarget(g) {
+  if (g.targetsByUid && typeof g.targetsByUid === 'object') {
+    const sum = Object.values(g.targetsByUid).reduce((a, v) => a + (Number(v) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return Number(g.target) || 0;
+}
+function computeGoalCurrent(g) {
+  if (g.currentByUid && typeof g.currentByUid === 'object') {
+    const sum = Object.values(g.currentByUid).reduce((a, v) => a + (Number(v) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return Number(g.current) || 0;
+}
+
+// Compute the current user's actual savings this month (for goal funding logic)
+function computeMyActualSavings() {
+  const us = App.userSettings || DEFAULT_USER_SETTINGS;
+  const s = App.settings || DEFAULT_SETTINGS;
+  if (!us.salary) return 0;
+  const period = computeCurrentPeriod(s.periodStartDay);
+  const totalSpent = App.expenses
+    .filter(e => e.periodKey === period.key)
+    .reduce((a, e) => a + Number(e.amount || 0), 0);
+  const totalBudget = Number(s.totalBudget) || 0;
+
+  // My budget + To Pay outflow
+  const myBudget = us.budgetMethod === 'pct'
+    ? totalBudget * (Number(us.budgetPct) / 100)
+    : Number(us.budgetFixed) || 0;
+  const unpaidToPay = App.toPay.filter(x => !x.paid);
+  const myToPay = us.toPayMethod === 'pct'
+    ? unpaidToPay.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100)
+    : Number(us.toPayFixed) || 0;
+
+  // Leftover share (proportional to my %)
+  const leftover = totalBudget - totalSpent;
+  const mySharePct = us.budgetMethod === 'pct'
+    ? (Number(us.budgetPct) / 100)
+    : (totalBudget > 0 ? (Number(us.budgetFixed) || 0) / totalBudget : 0);
+  const myLeftoverShare = leftover * mySharePct;
+
+  // Savings BEFORE goal contributions
+  return Number(us.salary) - myBudget - myToPay + myLeftoverShare;
+}
+
+// Determine whether a specific member's goals can be funded this month
+function canFundGoalForMember(uid, monthlyAmount, savingsBeforeGoals) {
+  if (!monthlyAmount || monthlyAmount <= 0) return false;
+  return savingsBeforeGoals >= monthlyAmount;
+}
+
 ScreenRenderers.saved = function () {
   const s = App.settings || DEFAULT_SETTINGS;
+  const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
   const lastPeriod = computePreviousPeriod(period);
+  const myUid = App.user?.uid;
 
+  // Total household savings = sum over history of per-member actual savings
   let totalSaved = 0;
   let hasTracked = false;
   App.history.forEach(h => {
@@ -1428,6 +1420,34 @@ ScreenRenderers.saved = function () {
     }
   }
   const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
+
+  // Compute current savings for goal-funding check
+  const mySavingsBeforeGoals = computeMyActualSavings();
+
+  // Compute per-member savings for others (approx. same formula for each)
+  const memberSavingsBeforeGoals = {};
+  Object.keys(s.members || {}).forEach(uid => {
+    const member = s.members[uid];
+    const mus = { ...DEFAULT_USER_SETTINGS, ...member };
+    if (!mus.salary) { memberSavingsBeforeGoals[uid] = 0; return; }
+    const totalSpent = App.expenses
+      .filter(e => e.periodKey === period.key)
+      .reduce((a, e) => a + Number(e.amount || 0), 0);
+    const totalBudget = Number(s.totalBudget) || 0;
+    const mBudget = mus.budgetMethod === 'pct'
+      ? totalBudget * (Number(mus.budgetPct) / 100)
+      : Number(mus.budgetFixed) || 0;
+    const unpaidToPay = App.toPay.filter(x => !x.paid);
+    const mToPay = mus.toPayMethod === 'pct'
+      ? unpaidToPay.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(mus.toPayPct) / 100)
+      : Number(mus.toPayFixed) || 0;
+    const leftover = totalBudget - totalSpent;
+    const mSharePct = mus.budgetMethod === 'pct'
+      ? (Number(mus.budgetPct) / 100)
+      : (totalBudget > 0 ? (Number(mus.budgetFixed) || 0) / totalBudget : 0);
+    const mLeftoverShare = leftover * mSharePct;
+    memberSavingsBeforeGoals[uid] = Number(mus.salary) - mBudget - mToPay + mLeftoverShare;
+  });
 
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Combined wealth,', 'Saved'));
@@ -1456,7 +1476,6 @@ ScreenRenderers.saved = function () {
     empty.innerHTML = '<div class="emoji">🎯</div><div>No goals yet.<br><b>Create one to start saving.</b></div>';
     wrap.appendChild(empty);
   } else {
-    const myUid = App.user?.uid;
     App.goals.forEach(g => {
       const combinedTarget = computeGoalTarget(g);
       const combinedCurrent = computeGoalCurrent(g);
@@ -1468,31 +1487,69 @@ ScreenRenderers.saved = function () {
       el.className = 'goal-card';
       el.style.setProperty('--accent', accentColor);
 
-      // Only avatars, me rightmost
       const tagUids = g.tagUids || [];
-      let avsHtml = '';
+      const monthlySplit = g.monthlySplit || {};
+
+      // Determine per-member pause state
+      const memberStatus = {};
+      let anyPaused = false;
+      tagUids.forEach(uid => {
+        const monthly = Number(monthlySplit[uid]) || 0;
+        const canFund = canFundGoalForMember(uid, monthly, memberSavingsBeforeGoals[uid] || 0);
+        memberStatus[uid] = { monthly, canFund };
+        if (!canFund) anyPaused = true;
+      });
+
+      // Badge state
+      const badgeClass = anyPaused ? 'goal-badge paused' : 'goal-badge';
+      const badgeInner = anyPaused
+        ? '<span class="pause-2" style="width:10px;height:10px;"><span style="width:2.5px;height:7px;"></span><span style="width:2.5px;height:7px;"></span></span>Paused'
+        : 'On Track';
+
+      // Build pills
+      let pillsHtml = '';
       if (tagUids.length > 0) {
         const sortedUids = tagUids.slice().sort((a, b) => {
           if (a === myUid) return 1;
           if (b === myUid) return -1;
           return 0;
         });
-        avsHtml = '<span class="goal-avs">' + sortedUids.map(u => getAvatarHtml(u, '22px')).join('') + '</span>';
+        pillsHtml = sortedUids.map(uid => {
+          const av = getAvatarHtml(uid, '16px');
+          const st = memberStatus[uid];
+          if (!st.canFund) {
+            return '<span class="ppl-badge-inline">' + av +
+              '<span class="pause-icon"><span class="pause-2"><span></span><span></span></span></span>' +
+            '</span>';
+          }
+          return '<span class="ppl-badge-inline">' + av + fmtAmount(st.monthly) + '</span>';
+        }).join('');
       }
 
-      const autoAmount = Number(g.autoAmount) || 0;
-      const autoPill = autoAmount > 0
-        ? '<span class="auto-pill">' + fmtAmount(autoAmount) + '/mo</span>'
-        : '';
+      // Footer pill — current user's monthly amount (only if tagged)
+      let footerPill = '';
+      if (tagUids.includes(myUid)) {
+        const myStatus = memberStatus[myUid];
+        if (!myStatus.canFund) {
+          footerPill = '<span class="auto-pill paused"><span class="pause-icon"><span class="pause-2"><span></span><span></span></span></span></span>';
+        } else {
+          footerPill = '<span class="auto-pill">' + fmtAmount(myStatus.monthly) + '</span>';
+        }
+      } else {
+        footerPill = '<span style="font-size:11px;color:var(--text3);">Not your goal</span>';
+      }
 
       el.innerHTML =
         '<div class="goal-top">' +
-          '<div class="goal-name">' + esc(g.icon || '🎯') + ' ' + esc(g.name) + avsHtml + '</div>' +
-          '<div class="goal-badge">' + (pct >= 100 ? 'Reached' : 'On Track') + '</div>' +
+          '<div class="goal-name">' +
+            esc(g.icon || '🎯') + ' ' + esc(g.name) +
+            '<div class="pills">' + pillsHtml + '</div>' +
+          '</div>' +
+          '<div class="' + badgeClass + '">' + badgeInner + '</div>' +
         '</div>' +
         '<div class="goal-nums"><span><b>' + fmtAmount(combinedCurrent) + '</b> / ' + fmtAmount(combinedTarget) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
-        '<div class="goal-foot">' + autoPill +
+        '<div class="goal-foot">' + footerPill +
           '<span>' + fmtAmount(Math.max(0, combinedTarget - combinedCurrent)) + ' to go</span>' +
         '</div>';
       el.onclick = () => openGoalSheet(g);
@@ -1511,8 +1568,8 @@ ScreenRenderers.saved = function () {
       (Number(r.budgetSnapshot) - Number(r.totalSpent));
 
     const sorted = splits.slice().sort((a, b) => {
-      if (a.uid === App.user.uid) return 1;
-      if (b.uid === App.user.uid) return -1;
+      if (a.uid === myUid) return 1;
+      if (b.uid === myUid) return -1;
       return 0;
     });
 
@@ -1536,24 +1593,7 @@ ScreenRenderers.saved = function () {
   return wrap;
 };
 
-function computeGoalTarget(g) {
-  if (g.targetsByUid && typeof g.targetsByUid === 'object') {
-    const sum = Object.values(g.targetsByUid).reduce((a, v) => a + (Number(v) || 0), 0);
-    if (sum > 0) return sum;
-  }
-  return Number(g.target) || 0;
-}
-function computeGoalCurrent(g) {
-  if (g.currentByUid && typeof g.currentByUid === 'object') {
-    const sum = Object.values(g.currentByUid).reduce((a, v) => a + (Number(v) || 0), 0);
-    if (sum > 0) return sum;
-  }
-  return Number(g.current) || 0;
-}
-
-/* ============================================================
-   SETTINGS
-   ============================================================ */
+/* SETTINGS */
 ScreenRenderers.settings = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
@@ -1634,7 +1674,7 @@ ScreenRenderers.settings = function () {
   }));
   wrap.appendChild(mg);
 
-  // Appearance — pin pill removed
+  // Appearance
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
   const themeRow = document.createElement('div');
@@ -1779,7 +1819,6 @@ ScreenRenderers.settings = function () {
   wrap.appendChild(signOutBtn);
   wrap.appendChild(h('div', { style: 'height:40px;' }));
 
-  // Handlers
   setTimeout(() => {
     const budgetSeg = document.getElementById('budget-method-seg');
     if (budgetSeg) budgetSeg.querySelectorAll('[data-method]').forEach(b => {
@@ -1899,9 +1938,7 @@ function changeTheme(theme) {
   });
 }
 
-/* ============================================================
-   MEMBER MANAGEMENT
-   ============================================================ */
+/* MEMBER MANAGEMENT */
 function confirmKickMember(uid, m) {
   const name = m.name || m.email || uid;
   if (!confirm('Kick "' + name + '" from the household?\n\nThey will be signed out and blocked from signing back in.\nTheir data stays — you can unban them later.')) return;
@@ -1981,9 +2018,7 @@ function confirmClearBanned() {
   FB.updateDoc(budgetDoc(), { bannedUids: [] }).then(() => toast('Banned list cleared'));
 }
 
-/* ============================================================
-   PROFILE
-   ============================================================ */
+/* PROFILE */
 function openProfileEditor() {
   const s = App.settings || DEFAULT_SETTINGS;
   const members = s.members || {};
@@ -2078,9 +2113,7 @@ function resizeImageToBase64(file, size) {
   });
 }
 
-/* ============================================================
-   GOALS — H5 hero + tabs + Option 1 segmented "who" control
-   ============================================================ */
+/* GOALS */
 function openGoalEditor() {
   const g = {
     name: '', icon: '🎯', target: 0, current: 0,
@@ -2110,7 +2143,6 @@ function showGoalSheet(g, isNew) {
     const myUid = App.user.uid;
     const memberList = members.map(uid => ({ uid, name: displayName(uid), isMe: uid === myUid }));
 
-    // Seed per-person values
     if (Object.keys(g.targetsByUid || {}).length > 0) editing.targetsByUid = { ...g.targetsByUid };
     else if (g.target && editing.tagUids.length > 0) {
       const each = Math.round(g.target / editing.tagUids.length);
@@ -2123,25 +2155,28 @@ function showGoalSheet(g, isNew) {
 
     let activeUid = editing.tagUids.includes(myUid) ? myUid : (editing.tagUids[0] || myUid);
 
-    // Icon (tap to open sheet)
-    const iconEl = document.createElement('div');
-    iconEl.className = 'v4-icon';
-    iconEl.textContent = editing.icon;
-    iconEl.onclick = () => {
-      buildIconPickerInline(editing.icon, (emoji) => {
+    // Goal editor header: icon left, name right
+    const header = document.createElement('div');
+    header.className = 'goal-editor-header';
+    const iconBtn = document.createElement('div');
+    iconBtn.className = 'icon-btn-lg';
+    iconBtn.textContent = editing.icon;
+    iconBtn.onclick = () => {
+      openIconPickerWithSave(editing.icon, (emoji) => {
         editing.icon = emoji;
-        iconEl.textContent = emoji;
+        iconBtn.textContent = emoji;
       });
     };
-    body.appendChild(iconEl);
+    header.appendChild(iconBtn);
 
     const titleInput = document.createElement('input');
-    titleInput.className = 'v4-title-input';
-    titleInput.value = editing.name || 'New Goal';
-    titleInput.placeholder = 'Goal Name';
-    body.appendChild(titleInput);
+    titleInput.className = 'title-input';
+    titleInput.value = editing.name || '';
+    titleInput.placeholder = 'Goal name';
+    header.appendChild(titleInput);
+    body.appendChild(header);
 
-    // "Who is this goal for?" — Option 1 segmented control
+    // Who is this goal for — Option 1 segmented
     const whoRow = document.createElement('div');
     whoRow.className = 'who-row';
     body.appendChild(whoRow);
@@ -2153,42 +2188,25 @@ function showGoalSheet(g, isNew) {
       if (hasMe && hasOther) return 'joint';
       if (hasMe) return 'me';
       if (hasOther) return 'partner';
-      return 'me'; // default
+      return 'me';
     }
 
     function renderWho() {
       whoRow.innerHTML = '<span class="lbl">Who is this goal for?</span>';
       const segEl = document.createElement('div');
       segEl.className = 'who-seg';
-
-      const meAv = getAvatarHtml(myUid, '16px');
       const otherUid = members.find(u => u !== myUid);
-      const otherAv = otherUid ? getAvatarHtml(otherUid, '16px') : '';
-
       const state = computeWhoState();
 
-      [['me','Me', meAv], ['partner','Partner', otherAv], ['joint','Joint', otherAv + meAv]].forEach(([val, label, avHtml]) => {
+      const buildChip = (val, label, avatarHtml) => {
         const b = document.createElement('button');
         b.type = 'button';
         if (state === val) b.className = 'active';
-        if (val === 'joint') {
-          const otherUidLocal = members.find(u => u !== myUid);
-          const leftAv = otherUidLocal ? getAvatarHtml(otherUidLocal, '16px') : '';
-          const rightAv = getAvatarHtml(myUid, '16px');
-          b.innerHTML = '<span class="avs">' + leftAv + rightAv + '</span><span>' + label + '</span>';
-        } else {
-          b.innerHTML = avHtml + '<span>' + label + '</span>';
-        }
+        b.innerHTML = avatarHtml + '<span>' + label + '</span>';
         b.onclick = () => {
-          if (val === 'me') {
-            editing.tagUids = [myUid];
-          } else if (val === 'partner') {
-            const o = members.find(u => u !== myUid);
-            editing.tagUids = o ? [o] : [myUid];
-          } else {
-            editing.tagUids = [myUid, ...(otherUid ? [otherUid] : [])];
-          }
-          // Ensure target/current/monthly keys
+          if (val === 'me') editing.tagUids = [myUid];
+          else if (val === 'partner') editing.tagUids = otherUid ? [otherUid] : [myUid];
+          else editing.tagUids = [myUid, ...(otherUid ? [otherUid] : [])];
           editing.tagUids.forEach(uid => {
             if (editing.targetsByUid[uid] == null) editing.targetsByUid[uid] = 0;
             if (editing.currentByUid[uid] == null) editing.currentByUid[uid] = 0;
@@ -2200,12 +2218,19 @@ function showGoalSheet(g, isNew) {
           renderWho();
           renderH5();
         };
-        segEl.appendChild(b);
-      });
+        return b;
+      };
+
+      segEl.appendChild(buildChip('me', 'Me', getAvatarHtml(myUid, '16px')));
+      if (otherUid) segEl.appendChild(buildChip('partner', 'Partner', getAvatarHtml(otherUid, '16px')));
+      const jointAvs = '<span class="avs">' +
+        (otherUid ? getAvatarHtml(otherUid, '16px') : '') +
+        getAvatarHtml(myUid, '16px') + '</span>';
+      segEl.appendChild(buildChip('joint', 'Joint', jointAvs));
       whoRow.appendChild(segEl);
     }
 
-    // Date + accent color
+    // Date + accent
     const dateRow = document.createElement('div');
     dateRow.className = 'v4-row';
     dateRow.innerHTML = '<label>Target Date</label>' +
@@ -2218,12 +2243,10 @@ function showGoalSheet(g, isNew) {
     colorRow.className = 'v4-row';
     colorRow.innerHTML = '<label>Accent Color</label><div class="swatch c-' + editing.colorKey + '" style="width:22px;height:22px;border-radius:11px;background:var(--cat);"></div>';
     body.appendChild(colorRow);
-    colorRow.onclick = () => {
-      openColorPicker(editing.colorKey, (key) => {
-        editing.colorKey = key;
-        colorRow.querySelector('.swatch').className = 'swatch c-' + key;
-      });
-    };
+    colorRow.onclick = () => openColorPickerWithSave(editing.colorKey, (key) => {
+      editing.colorKey = key;
+      colorRow.querySelector('.swatch').className = 'swatch c-' + key;
+    });
 
     // H5 hero + tabs + inputs
     const h5Container = document.createElement('div');
@@ -2245,7 +2268,6 @@ function showGoalSheet(g, isNew) {
 
       if (editing.tagUids.length === 0) return;
 
-      // Tabs — me rightmost
       const tabs = document.createElement('div');
       tabs.className = 'ge-tabs';
       const sorted = editing.tagUids.slice().sort((a, b) => {
@@ -2265,7 +2287,6 @@ function showGoalSheet(g, isNew) {
       });
       h5Container.appendChild(tabs);
 
-      // Inputs
       const inputs = document.createElement('div');
       inputs.className = 'ge-inputs';
       inputs.innerHTML =
@@ -2275,7 +2296,6 @@ function showGoalSheet(g, isNew) {
           '<input id="ge-monthly" inputmode="numeric" value="' + (editing.monthlySplit[activeUid] || '') + '" placeholder="0"></div>';
       h5Container.appendChild(inputs);
 
-      // Foot
       const foot = document.createElement('div');
       foot.className = 'ge-foot';
       const activeM = memberList.find(x => x.uid === activeUid);
@@ -2293,22 +2313,15 @@ function showGoalSheet(g, isNew) {
         editing.targetsByUid[activeUid] = Number(tInp.value) || 0;
         hero.querySelector('.num').innerHTML = fmtAmount(combinedTarget()) +
           '<span class="cur">' + esc(App.settings?.currency || 'SEK') + '</span>';
-        foot.querySelector('.tot').textContent = fmtAmount(Number(editing.targetsByUid[activeUid]) || 0) + ' ' +
-          (App.settings?.currency || 'SEK') + ' · ' +
-          fmtAmount(Number(editing.monthlySplit[activeUid]) || 0) + '/mo';
       };
       if (mInp) mInp.oninput = () => {
         editing.monthlySplit[activeUid] = Number(mInp.value) || 0;
-        foot.querySelector('.tot').textContent = fmtAmount(Number(editing.targetsByUid[activeUid]) || 0) + ' ' +
-          (App.settings?.currency || 'SEK') + ' · ' +
-          fmtAmount(Number(editing.monthlySplit[activeUid]) || 0) + '/mo';
       };
     }
 
     renderWho();
     renderH5();
 
-    // Actions
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'v4-actions';
 
@@ -2357,9 +2370,7 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* ============================================================
-   CATEGORY EDITOR
-   ============================================================ */
+/* CATEGORY EDITOR */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
@@ -2401,37 +2412,30 @@ function openCategoryEditor(cat) {
     };
 
     const iconF = document.createElement('div');
-    iconF.className = 'field';
-    iconF.style.cursor = 'pointer';
+    iconF.className = 'field clickable';
     iconF.innerHTML = '<label>Icon</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<span id="ce-icon-val" style="font-size:20px;">' + esc(editing.icon || '🏷️') + '</span>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(iconF);
+    iconF.onclick = () => openIconPickerWithSave(editing.icon || '🏷️', (emoji) => {
+      editing.icon = emoji;
+      document.getElementById('ce-icon-val').textContent = emoji;
+    });
 
     const colorF = document.createElement('div');
-    colorF.className = 'field c-' + (editing.colorKey || 'blue');
-    colorF.style.cursor = 'pointer';
+    colorF.className = 'field clickable c-' + (editing.colorKey || 'blue');
     colorF.innerHTML = '<label>Color</label>' +
       '<div style="display:flex;align-items:center;gap:10px;">' +
         '<div class="color-swatch"></div>' +
         '<span style="color:var(--text3);">›</span>' +
       '</div>';
     body.appendChild(colorF);
-
-    iconF.onclick = () => {
-      buildIconPickerInline(editing.icon || '🏷️', (emoji) => {
-        editing.icon = emoji;
-        document.getElementById('ce-icon-val').textContent = emoji;
-      });
-    };
-    colorF.onclick = () => {
-      openColorPicker(editing.colorKey || 'blue', (key) => {
-        editing.colorKey = key;
-        colorF.className = 'field c-' + key;
-      });
-    };
+    colorF.onclick = () => openColorPickerWithSave(editing.colorKey || 'blue', (key) => {
+      editing.colorKey = key;
+      colorF.className = 'field clickable c-' + key;
+    });
 
     footer.innerHTML = '';
     const save = document.createElement('button');
@@ -2460,9 +2464,7 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* ============================================================
-   COLOR / ICON / TONE PICKERS
-   ============================================================ */
+/* COLOR / ICON PICKERS with floating Save */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -2470,48 +2472,34 @@ const PALETTE = [
   'red','crimson','ruby','rose','raspberry','pink','magenta','fuchsia','salmon','blush',
   'brown','cocoa','coffee','slate','steel','gray','stone','sand','clay','graphite',
 ];
-function buildColorPicker(container, current, onPick) {
-  container.innerHTML = '';
-  const grid = document.createElement('div');
-  grid.className = 'palette-grid';
-  PALETTE.forEach(key => {
-    const chip = document.createElement('div');
-    chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
-    chip.onclick = () => {
-      grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
-      chip.classList.add('on');
-      onPick(key);
-    };
-    grid.appendChild(chip);
-  });
-  container.appendChild(grid);
-}
-function openColorPicker(current, onPick) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick Color</h3>';
-    const container = document.createElement('div');
-    body.appendChild(container);
-    buildColorPicker(container, current, (key) => { onPick(key); closeSheet(); });
-  });
-}
-function openPillColorPicker(type) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick Pill Color</h3>';
+
+function openColorPickerWithSave(current, onPick) {
+  let selected = current;
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>Pick a color</h3>';
     const grid = document.createElement('div');
     grid.className = 'palette-grid';
-    const pc = (App.settings && App.settings.pillColors) || {};
-    const current = pc[type] || 'blue';
     PALETTE.forEach(key => {
       const chip = document.createElement('div');
-      chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
-      chip.onclick = async () => {
-        const newPC = { ...(App.settings.pillColors || {}), [type]: key };
-        await saveSetting('pillColors', newPC);
-        closeSheet();
+      chip.className = 'color-chip c-' + key + (key === selected ? ' on' : '');
+      chip.onclick = () => {
+        grid.querySelectorAll('.color-chip').forEach(c => c.classList.remove('on'));
+        chip.classList.add('on');
+        selected = key;
       };
       grid.appendChild(chip);
     });
     body.appendChild(grid);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = () => {
+      onPick(selected);
+      closeSheet();
+    };
+    footer.appendChild(saveBtn);
   });
 }
 
@@ -2528,77 +2516,80 @@ const ICONS = {
   'Travel': [['🏖️','beach'],['🏔️','mountain'],['🏨','hotel'],['🗺️','map'],['✈️','plane'],['🎫','ticket'],['🎉','party'],['🎂','birthday'],['🎊','confetti'],['🎓','graduation'],['🎁','gift'],['🏟️','stadium'],['🎡','ferris wheel'],['🚢','cruise'],['🌍','earth'],['🕯️','candle']],
   'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
 };
-function buildIconPicker(container, current, onPick) {
-  container.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'icon-picker';
 
-  const search = document.createElement('input');
-  search.className = 'icon-search';
-  search.placeholder = '🔍  Search icons…';
-  wrap.appendChild(search);
+function openIconPickerWithSave(current, onPick) {
+  let selected = current;
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>Pick an icon</h3>';
+    const wrap = document.createElement('div');
+    wrap.className = 'icon-picker';
 
-  const scroll = document.createElement('div');
-  function render(q) {
-    scroll.innerHTML = '';
-    const query = (q || '').toLowerCase().trim();
-    let any = false;
-    Object.entries(ICONS).forEach(([cat, list]) => {
-      const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
-      if (!matches.length) return;
-      any = true;
-      const label = document.createElement('div');
-      label.className = 'icon-cat-label';
-      label.textContent = cat;
-      scroll.appendChild(label);
-      const grid = document.createElement('div');
-      grid.className = 'icon-grid';
-      matches.forEach(([emoji]) => {
-        const btn = document.createElement('button');
-        btn.className = 'icon-btn' + (emoji === current ? ' on' : '');
-        btn.textContent = emoji;
-        btn.onclick = () => {
-          current = emoji;
-          grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
-          btn.classList.add('on');
-          onPick(emoji);
-        };
-        grid.appendChild(btn);
+    const search = document.createElement('input');
+    search.className = 'icon-search';
+    search.placeholder = '🔍  Search icons…';
+    wrap.appendChild(search);
+
+    const scroll = document.createElement('div');
+    function render(q) {
+      scroll.innerHTML = '';
+      const query = (q || '').toLowerCase().trim();
+      let any = false;
+      Object.entries(ICONS).forEach(([cat, list]) => {
+        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
+        if (!matches.length) return;
+        any = true;
+        const label = document.createElement('div');
+        label.className = 'icon-cat-label';
+        label.textContent = cat;
+        scroll.appendChild(label);
+        const grid = document.createElement('div');
+        grid.className = 'icon-grid';
+        matches.forEach(([emoji]) => {
+          const btn = document.createElement('button');
+          btn.className = 'icon-btn' + (emoji === selected ? ' on' : '');
+          btn.textContent = emoji;
+          btn.onclick = () => {
+            selected = emoji;
+            grid.querySelectorAll('.icon-btn').forEach(b => b.classList.remove('on'));
+            btn.classList.add('on');
+          };
+          grid.appendChild(btn);
+        });
+        scroll.appendChild(grid);
       });
-      scroll.appendChild(grid);
-    });
-    if (!any) {
-      const empty = document.createElement('div');
-      empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
-      empty.textContent = 'No icons match "' + query + '"';
-      scroll.appendChild(empty);
+      if (!any) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;padding:20px;color:var(--text2);font-size:13px;';
+        empty.textContent = 'No icons match "' + query + '"';
+        scroll.appendChild(empty);
+      }
     }
-  }
-  search.oninput = () => render(search.value);
-  wrap.appendChild(scroll);
+    search.oninput = () => render(search.value);
+    wrap.appendChild(scroll);
 
-  const custom = document.createElement('div');
-  custom.className = 'custom-emoji-wrap';
-  custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
-  const ci = custom.querySelector('input');
-  const cb = custom.querySelector('button');
-  const commit = () => { const v = ci.value.trim(); if (!v) return; onPick(v); ci.value = ''; };
-  cb.onclick = commit;
-  ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-  wrap.appendChild(custom);
+    const custom = document.createElement('div');
+    custom.className = 'custom-emoji-wrap';
+    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
+    const ci = custom.querySelector('input');
+    const cb = custom.querySelector('button');
+    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
+    cb.onclick = commit;
+    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    wrap.appendChild(custom);
 
-  container.appendChild(wrap);
-  render('');
-}
-function buildIconPickerInline(current, onPick) {
-  openSheet((body) => {
-    body.innerHTML = '<h3>Pick an Icon</h3>';
-    const container = document.createElement('div');
-    body.appendChild(container);
-    buildIconPicker(container, current, (emoji) => { onPick(emoji); closeSheet(); });
+    body.appendChild(wrap);
+
+    footer.innerHTML = '';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
+    footer.appendChild(saveBtn);
+    render('');
   });
 }
 
+/* TONE PICKER */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
@@ -2646,9 +2637,28 @@ function openTonePicker(currentKey) {
   });
 }
 
-/* ============================================================
-   EXPENSE EDITOR
-   ============================================================ */
+function openPillColorPicker(type) {
+  openSheet((body) => {
+    body.innerHTML = '<h3>Pick Pill Color</h3>';
+    const grid = document.createElement('div');
+    grid.className = 'palette-grid';
+    const pc = (App.settings && App.settings.pillColors) || {};
+    const current = pc[type] || 'blue';
+    PALETTE.forEach(key => {
+      const chip = document.createElement('div');
+      chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
+      chip.onclick = async () => {
+        const newPC = { ...(App.settings.pillColors || {}), [type]: key };
+        await saveSetting('pillColors', newPC);
+        closeSheet();
+      };
+      grid.appendChild(chip);
+    });
+    body.appendChild(grid);
+  });
+}
+
+/* EXPENSE EDITOR */
 function openExpenseEditor(expense, prefillName) {
   const isNew = !expense;
   const working = expense ? Object.assign({}, expense) : { name: prefillName || '', amount: 0, categoryId: '', subcategoryId: '' };
@@ -2724,9 +2734,7 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* ============================================================
-   TO PAY EDITOR — cleaner layout
-   ============================================================ */
+/* TO PAY EDITOR — multi-digit split inputs */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
@@ -2747,7 +2755,6 @@ function openToPayEditor(item) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + (isNew ? 'New payment' : 'Edit payment') + '</h3>';
 
-    // Total amount hero
     const amtHero = document.createElement('div');
     amtHero.className = 'tp-amount-hero';
     amtHero.innerHTML =
@@ -2758,7 +2765,6 @@ function openToPayEditor(item) {
       '</div>';
     body.appendChild(amtHero);
 
-    // Name + due
     const nameF = document.createElement('div');
     nameF.className = 'field';
     nameF.innerHTML = '<label>Name</label><input id="tp-name" value="' + esc(item.name) + '" placeholder="Rent, Internet…">';
@@ -2771,7 +2777,6 @@ function openToPayEditor(item) {
     const dueInput = dueF.querySelector('#tp-due');
     dueInput.addEventListener('input', () => autoSlashDate(dueInput));
 
-    // Type
     const typeF = document.createElement('div');
     typeF.className = 'field';
     typeF.innerHTML = '<label>Type</label>';
@@ -2800,7 +2805,6 @@ function openToPayEditor(item) {
     body.appendChild(repeatEndF);
     repeatEndF.querySelector('#tp-repeat-end').addEventListener('input', (e) => autoSlashDate(e.target));
 
-    // Who pays section
     const tpSection = document.createElement('div');
     tpSection.className = 'tp-section';
     body.appendChild(tpSection);
@@ -2810,6 +2814,35 @@ function openToPayEditor(item) {
       if (v === '') return null;
       const n = Number(v);
       return isNaN(n) ? null : n;
+    }
+
+    function updateSplitTotals() {
+      // Update only the totals + warn, do NOT re-render inputs
+      const main = getPrimaryAmount();
+      let total = 0;
+      currentTagUids.forEach(uid => { total += Number(amountsByUid[uid]) || 0; });
+      const warn = main != null && main > 0 && Math.abs(total - main) > 0.5;
+      const secHead = tpSection.querySelector('.sec-head .tot');
+      if (secHead) {
+        secHead.className = 'tot' + (warn ? ' warn' : '');
+        secHead.innerHTML =
+          'Assigned: <span style="color:' + (warn ? 'var(--red)' : 'var(--text)') + ';font-weight:600;">' + fmtAmount(total) + '</span> ' +
+          '<span style="color:var(--text3);font-weight:500;">/ ' + (main != null ? fmtAmount(main) : '—') + '</span>';
+      }
+      // Warn block
+      let warnEl = tpSection.querySelector('.split-warn');
+      if (warn) {
+        if (!warnEl) {
+          warnEl = document.createElement('div');
+          warnEl.className = 'split-warn';
+          const eqBtn = tpSection.querySelector('.split-equal-btn');
+          if (eqBtn) tpSection.insertBefore(warnEl, eqBtn);
+          else tpSection.appendChild(warnEl);
+        }
+        warnEl.innerHTML = '<div class="icon">!</div><div>Assigned amounts don\'t match the total. Difference: <strong>' + fmtAmount(Math.abs(total - main)) + '</strong></div>';
+      } else if (warnEl) {
+        warnEl.remove();
+      }
     }
 
     function renderSplits() {
@@ -2857,7 +2890,7 @@ function openToPayEditor(item) {
         if (isOn) {
           amtInp.addEventListener('input', () => {
             amountsByUid[m.uid] = Number(amtInp.value) || 0;
-            renderSplits();
+            updateSplitTotals();
           });
         }
         tpSection.appendChild(row);
@@ -2886,7 +2919,7 @@ function openToPayEditor(item) {
 
     setTimeout(() => {
       const amtInput = document.getElementById('tp-amt');
-      if (amtInput) amtInput.addEventListener('input', renderSplits);
+      if (amtInput) amtInput.addEventListener('input', updateSplitTotals);
     }, 0);
 
     footer.innerHTML = '';
@@ -2942,9 +2975,7 @@ function openToPayEditor(item) {
   });
 }
 
-/* ============================================================
-   HISTORY HELPERS
-   ============================================================ */
+/* HISTORY HELPERS */
 async function syncCurrentHistoryBudget(settingsOverride) {
   const s = settingsOverride || App.settings || DEFAULT_SETTINGS;
   const period = computeCurrentPeriod(s.periodStartDay);
@@ -2973,9 +3004,7 @@ async function recomputeHistoryTotal(periodKey) {
   if (hs.exists()) await FB.updateDoc(ref, { totalSpent: total });
 }
 
-/* ============================================================
-   PERIODS
-   ============================================================ */
+/* PERIODS */
 function computeCurrentPeriod(startDay) {
   startDay = Math.min(31, Math.max(1, Number(startDay) || 25));
   const now = new Date();
@@ -3043,9 +3072,7 @@ function labelForDay(iso) {
   return full;
 }
 
-/* ============================================================
-   RESET DAY / TO PAY RESET / AUTO-CONTRIBUTION
-   ============================================================ */
+/* RESET DAY / RUN RESET / AUTO-CONTRIBUTIONS */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -3162,28 +3189,70 @@ async function maybeAutoReset() {
 }
 async function applyGoalAutoContributions(monthKey) {
   if (!App.goals || App.goals.length === 0) return;
+  // First compute per-member savings before goals
+  const memberSavingsBeforeGoals = {};
+  const period = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay);
+  const totalSpent = App.expenses
+    .filter(e => e.periodKey === period.key)
+    .reduce((a, e) => a + Number(e.amount || 0), 0);
+  const totalBudget = Number((App.settings || {}).totalBudget) || 0;
+  Object.entries((App.settings || {}).members || {}).forEach(([uid, member]) => {
+    const mus = { ...DEFAULT_USER_SETTINGS, ...member };
+    if (!mus.salary) { memberSavingsBeforeGoals[uid] = 0; return; }
+    const mBudget = mus.budgetMethod === 'pct'
+      ? totalBudget * (Number(mus.budgetPct) / 100)
+      : Number(mus.budgetFixed) || 0;
+    const unpaidToPay = App.toPay.filter(x => !x.paid);
+    const mToPay = mus.toPayMethod === 'pct'
+      ? unpaidToPay.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(mus.toPayPct) / 100)
+      : Number(mus.toPayFixed) || 0;
+    const leftover = totalBudget - totalSpent;
+    const mSharePct = mus.budgetMethod === 'pct'
+      ? (Number(mus.budgetPct) / 100)
+      : (totalBudget > 0 ? (Number(mus.budgetFixed) || 0) / totalBudget : 0);
+    const mLeftoverShare = leftover * mSharePct;
+    memberSavingsBeforeGoals[uid] = Number(mus.salary) - mBudget - mToPay + mLeftoverShare;
+  });
+
   for (const g of App.goals) {
     if (g.lastContributionMonth === monthKey) continue;
-    const autoAmount = Number(g.autoAmount) || 0;
-    if (autoAmount <= 0) continue;
-    const newCurrent = (Number(g.current) || 0) + autoAmount;
-    const updates = { current: newCurrent, lastContributionMonth: monthKey };
-    if (g.currentByUid && g.monthlySplit) {
-      const newCurrentByUid = { ...g.currentByUid };
-      Object.entries(g.monthlySplit).forEach(([uid, amt]) => {
-        newCurrentByUid[uid] = (Number(newCurrentByUid[uid]) || 0) + (Number(amt) || 0);
-      });
-      updates.currentByUid = newCurrentByUid;
+    const monthlySplit = g.monthlySplit || {};
+    const tagUids = g.tagUids || [];
+    const totalMonthly = tagUids.reduce((a, uid) => a + (Number(monthlySplit[uid]) || 0), 0);
+    if (totalMonthly <= 0) {
+      await FB.updateDoc(FB.doc(goalsCol(), g.id), { lastContributionMonth: monthKey });
+      continue;
     }
+
+    // ALL-OR-NOTHING: fund the goal only if EVERY tagged member has enough in their savings
+    const canFundAll = tagUids.every(uid => {
+      const monthly = Number(monthlySplit[uid]) || 0;
+      if (monthly <= 0) return true;
+      return (memberSavingsBeforeGoals[uid] || 0) >= monthly;
+    });
+
+    if (!canFundAll) {
+      await FB.updateDoc(FB.doc(goalsCol(), g.id), { lastContributionMonth: monthKey });
+      continue;
+    }
+
+    // Fund goal for each member
+    const updates = { lastContributionMonth: monthKey };
+    const newCurrentByUid = { ...(g.currentByUid || {}) };
+    tagUids.forEach(uid => {
+      const monthly = Number(monthlySplit[uid]) || 0;
+      newCurrentByUid[uid] = (Number(newCurrentByUid[uid]) || 0) + monthly;
+    });
+    updates.currentByUid = newCurrentByUid;
+    updates.current = Object.values(newCurrentByUid).reduce((a, v) => a + (Number(v) || 0), 0);
+
     try {
       await FB.updateDoc(FB.doc(goalsCol(), g.id), updates);
     } catch (e) { console.error('goal auto contribution:', e); }
   }
 }
 
-/* ============================================================
-   EXPORT / IMPORT / HARD RESET
-   ============================================================ */
+/* EXPORT / IMPORT / HARD RESET */
 function exportData() {
   const data = { settings: App.settings, categories: App.categories, expenses: App.expenses, toPay: App.toPay, buy: App.buy, history: App.history, goals: App.goals };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3264,12 +3333,9 @@ async function confirmHardReset() {
   } catch (e) { toast('Reset failed: ' + e.message); }
 }
 
-/* ============================================================
-   INPUT FOCUS BEHAVIOR (select-all on focus, restore on blur if empty)
-   ============================================================ */
+/* INPUT FOCUS BEHAVIOR — select all on focus, restore on blur if empty */
 document.addEventListener('focusin', (e) => {
   if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
-    // Select all text so typing overwrites — do NOT clear
     requestAnimationFrame(() => {
       try { e.target.select(); } catch (err) {}
     });
