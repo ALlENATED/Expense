@@ -1410,10 +1410,11 @@ ScreenRenderers.topay = function () {
            let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
-      const typeCls = item.isSubscription ? 'pill-type-sub'
-                    : item.isRepeat       ? 'pill-type-rep'
-                    : item.isDebt         ? 'pill-type-debt'
-                    : '';
+          let typeCls = '';
+      if (item.isSubscription) typeCls = 'pill-type-sub';
+      else if (item.isRepeat)  typeCls = 'pill-type-rep';
+      else if (item.isDebt)    typeCls = 'pill-type-debt';
+
       if (tagUids.length > 0) {
         badgesHtml = tagUids.map(uid => {
           const av = getAvatarHtml(uid, '20px');
@@ -1522,10 +1523,11 @@ ScreenRenderers.history = function () {
             '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
-         '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
+       '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
         (r.periodKey === computeCurrentPeriod(s.periodStartDay).key
           ? '<div class="delete-row" style="color:var(--text3);opacity:.6;cursor:default;">Current period · auto-managed</div>'
           : '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month\'s record ›</div>');
+      wrap.appendChild(card);
 
   setTimeout(() => {
     const prev = document.getElementById('hist-prev');
@@ -3309,7 +3311,7 @@ function openResetDayPicker() {
   });
 }
 async function confirmRunReset() {
-  if (!confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.')) return;
+  if (!confirm('...')) return;
   const today = new Date();
   const resetKey = today.getFullYear() + '-' + pad2(today.getMonth() + 1);
   try {
