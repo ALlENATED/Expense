@@ -50,7 +50,6 @@ const TABS = [
 const SCREENS = TABS.map(t => t.id);
 const ScreenRenderers = {};
 
-/* BOOT */
 function ready(fn) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', fn, { once: true });
@@ -674,20 +673,17 @@ ScreenRenderers.home = function () {
       const pctRaw = limit > 0 ? Math.round((spent / limit) * 100) : 0;
       const pct = Math.min(100, pctRaw);
 
-      // Per-person pills inside pinned card
+      // Pinned: stacked icons only (no amounts)
       let pinTagsHtml = '';
       const tagUids = c.tagUids || [];
-      const amountsByUid = c.amountsByUid || {};
       if (tagUids.length > 0) {
-        pinTagsHtml = '<div class="pin-tags">' + tagUids.map(uid => {
-          const av = getAvatarHtml(uid, '14px');
-          const amt = Number(amountsByUid[uid]) || 0;
-          if (amt > 0) {
-            return '<span class="ppl-badge-inline" style="font-size:10px;padding:1px 8px 1px 1px;gap:4px;">' +
-              av + fmtAmount(amt) + '</span>';
-          }
-          return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
-        }).join('') + '</div>';
+        const sorted = tagUids.slice().sort((a, b) => {
+          if (a === App.user.uid) return 1;
+          if (b === App.user.uid) return -1;
+          return 0;
+        });
+        pinTagsHtml = '<div class="pin-tags">' +
+          sorted.map(uid => getAvatarHtml(uid, '18px')).join('') + '</div>';
       }
 
       const el = document.createElement('div');
@@ -813,16 +809,18 @@ ScreenRenderers.categories = function () {
       const isPinned = myPins.includes(cat.id);
       const pinHtml = isPinned ? '<span class="pin-icon">📌</span>' : '';
 
-      // Tag pills (avatar + amount, inline next to name)
+      // Categories screen: show amount pills next to name
       let catTagsHtml = '';
       const tagUids = cat.tagUids || [];
       const amountsByUid = cat.amountsByUid || {};
+      const splitMode = cat.splitMode || {};
       if (tagUids.length > 0) {
         catTagsHtml = '<span class="cat-tags">' + tagUids.map(uid => {
           const av = getAvatarHtml(uid, '20px');
           const amt = Number(amountsByUid[uid]) || 0;
           if (amt > 0) {
-            return '<span class="ppl-badge-inline">' + av + fmtAmount(amt) + '</span>';
+            const suffix = splitMode[uid] === 'pct' ? '%' : '';
+            return '<span class="ppl-badge-inline">' + av + fmtAmount(amt) + suffix + '</span>';
           }
           return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
         }).join('') + '</span>';
@@ -988,7 +986,7 @@ async function deleteBuyList(l) {
   toast('List deleted');
 }
 
-/* Buy list editor — FIX: sub-sheet pickers with working Save */
+/* Buy list editor — pickers commit icon/color directly */
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
@@ -1042,6 +1040,7 @@ function openListMenu(l) {
       );
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       closeSheet();
+      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(save);
 
@@ -1112,6 +1111,7 @@ function openNewListEditor() {
       await FB.updateDoc(budgetDoc(), { buyLists: lists });
       App.activeBuyList = newList.id;
       closeSheet();
+      if (App.screen === 'buy') renderScreen('buy');
     };
     footer.appendChild(btn);
   });
@@ -1194,7 +1194,6 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
-      // Pills — no-amt variant when no amount (compact, no pill bg)
       let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
@@ -1389,31 +1388,6 @@ function computeGoalCurrent(g) {
   }
   return Number(g.current) || 0;
 }
-
-function computeMyActualSavings() {
-  const us = App.userSettings || DEFAULT_USER_SETTINGS;
-  const s = App.settings || DEFAULT_SETTINGS;
-  if (!us.salary) return 0;
-  const period = computeCurrentPeriod(s.periodStartDay);
-  const totalSpent = App.expenses
-    .filter(e => e.periodKey === period.key)
-    .reduce((a, e) => a + Number(e.amount || 0), 0);
-  const totalBudget = Number(s.totalBudget) || 0;
-  const myBudget = us.budgetMethod === 'pct'
-    ? totalBudget * (Number(us.budgetPct) / 100)
-    : Number(us.budgetFixed) || 0;
-  const unpaidToPay = App.toPay.filter(x => !x.paid);
-  const myToPay = us.toPayMethod === 'pct'
-    ? unpaidToPay.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100)
-    : Number(us.toPayFixed) || 0;
-  const leftover = totalBudget - totalSpent;
-  const mySharePct = us.budgetMethod === 'pct'
-    ? (Number(us.budgetPct) / 100)
-    : (totalBudget > 0 ? (Number(us.budgetFixed) || 0) / totalBudget : 0);
-  const myLeftoverShare = leftover * mySharePct;
-  return Number(us.salary) - myBudget - myToPay + myLeftoverShare;
-}
-
 function canFundGoalForMember(uid, monthlyAmount, savingsBeforeGoals) {
   if (!monthlyAmount || monthlyAmount <= 0) return false;
   return savingsBeforeGoals >= monthlyAmount;
@@ -1448,6 +1422,7 @@ ScreenRenderers.saved = function () {
   }
   const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
 
+  // Per-member savings before goals
   const memberSavingsBeforeGoals = {};
   Object.keys(s.members || {}).forEach(uid => {
     const member = s.members[uid];
@@ -1514,18 +1489,11 @@ ScreenRenderers.saved = function () {
       const monthlySplit = g.monthlySplit || {};
 
       const memberStatus = {};
-      let anyPaused = false;
       tagUids.forEach(uid => {
         const monthly = Number(monthlySplit[uid]) || 0;
         const canFund = canFundGoalForMember(uid, monthly, memberSavingsBeforeGoals[uid] || 0);
         memberStatus[uid] = { monthly, canFund };
-        if (!canFund) anyPaused = true;
       });
-
-      const badgeClass = anyPaused ? 'goal-badge paused' : 'goal-badge';
-      const badgeInner = anyPaused
-        ? '<span class="pause-2" style="width:10px;height:10px;"><span style="width:2.5px;height:7px;"></span><span style="width:2.5px;height:7px;"></span></span>Paused'
-        : 'On Track';
 
       let pillsHtml = '';
       if (tagUids.length > 0) {
@@ -1539,18 +1507,19 @@ ScreenRenderers.saved = function () {
           const st = memberStatus[uid];
           if (!st.canFund) {
             return '<span class="ppl-badge-inline">' + av +
-              '<span class="pause-icon"><span class="pause-2"><span></span><span></span></span></span>' +
+              '<span class="pause-icon-plain"><span></span><span></span></span>' +
             '</span>';
           }
           return '<span class="ppl-badge-inline">' + av + fmtAmount(st.monthly) + '</span>';
         }).join('');
       }
 
+      // Footer auto-pill for current user
       let footerPill = '';
       if (tagUids.includes(myUid)) {
         const myStatus = memberStatus[myUid];
         if (!myStatus.canFund) {
-          footerPill = '<span class="auto-pill paused"><span class="pause-icon"><span class="pause-2"><span></span><span></span></span></span></span>';
+          footerPill = '<span class="auto-pill paused"><span class="pause-icon-plain"><span></span><span></span></span></span>';
         } else {
           footerPill = '<span class="auto-pill">' + fmtAmount(myStatus.monthly) + '</span>';
         }
@@ -1564,7 +1533,7 @@ ScreenRenderers.saved = function () {
             esc(g.icon || '🎯') + ' ' + esc(g.name) +
             '<div class="pills">' + pillsHtml + '</div>' +
           '</div>' +
-          '<div class="' + badgeClass + '">' + badgeInner + '</div>' +
+          // NO paused badge here
         '</div>' +
         '<div class="goal-nums"><span><b>' + fmtAmount(combinedCurrent) + '</b> / ' + fmtAmount(combinedTarget) + '</span><span>' + pct + '%</span></div>' +
         '<div class="goal-bar"><div style="width:' + pct + '%"></div></div>' +
@@ -2346,6 +2315,7 @@ function showGoalSheet(g, isNew) {
       closeSheet();
       if (isNew) await FB.addDoc(goalsCol(), { ...payload, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(goalsCol(), g.id), payload);
+      if (App.screen === 'saved') renderScreen('saved');
     };
     actionsDiv.appendChild(saveBtn);
 
@@ -2366,19 +2336,18 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* CATEGORY EDITOR — with tags & splits */
+/* CATEGORY EDITOR — with tags, split mode, saves icon + color + split */
 function openCategoryEditor(cat) {
   const isNew = !cat;
   const editing = cat ? Object.assign({}, cat) : {
     name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '',
-    tagUids: [], amountsByUid: {}, splitMethod: 'fixed'
+    tagUids: [], amountsByUid: {}, splitMode: {}
   };
-  let pinState = (App.userSettings.pins || []).includes(editing.id);
-
-  // Migration: ensure tagUids/amountsByUid exist
   if (!Array.isArray(editing.tagUids)) editing.tagUids = [];
   if (!editing.amountsByUid) editing.amountsByUid = {};
-  if (!editing.splitMethod) editing.splitMethod = 'fixed';
+  if (!editing.splitMode) editing.splitMode = {};
+
+  let pinState = (App.userSettings.pins || []).includes(editing.id);
 
   const members = Object.keys(App.settings?.members || {});
   const myUid = App.user?.uid;
@@ -2446,52 +2415,56 @@ function openCategoryEditor(cat) {
       colorF.className = 'field clickable c-' + key;
     });
 
-    // Who pays section
-    const catSection = document.createElement('div');
-    catSection.className = 'cat-split-section';
-    body.appendChild(catSection);
+    // Split section
+    const splitTitle = document.createElement('div');
+    splitTitle.style.cssText = 'font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin:14px 4px 8px;';
+    splitTitle.textContent = 'Who pays for this category?';
+    body.appendChild(splitTitle);
+
+    const splitContainer = document.createElement('div');
+    body.appendChild(splitContainer);
 
     function renderSplits() {
-      catSection.innerHTML = '';
-
-      const secHead = document.createElement('div');
-      secHead.className = 'sec-head';
-      secHead.innerHTML =
-        '<div class="lbl">Who pays for this category?</div>' +
-        '<div class="tot">Tagged: ' + editing.tagUids.length + '</div>';
-      catSection.appendChild(secHead);
-
+      splitContainer.innerHTML = '';
       memberList.forEach(m => {
         const isOn = editing.tagUids.includes(m.uid);
         const amtVal = editing.amountsByUid[m.uid] != null ? editing.amountsByUid[m.uid] : '';
+        const mode = editing.splitMode[m.uid] || 'fixed';
+
         const row = document.createElement('div');
-        row.className = 'pp-row';
-        row.style.opacity = isOn ? '1' : '0.45';
+        row.className = 'compact-split';
+        row.style.opacity = isOn ? '1' : '0.5';
         row.innerHTML =
-          getAvatarHtml(m.uid, '36px') +
-          '<div class="info">' +
-            '<div class="nm">' + esc(m.name) + '</div>' +
-            '<div class="sub">' + (m.isMe ? 'Your share' : 'Their share') + '</div>' +
+          getAvatarHtml(m.uid, '22px') +
+          '<span class="name">' + esc(m.name) + '</span>' +
+          '<div class="seg">' +
+            '<button class="' + (mode === 'fixed' ? 'active' : '') + '" data-mode="fixed">Fixed</button>' +
+            '<button class="' + (mode === 'pct' ? 'active' : '') + '" data-mode="pct">%</button>' +
           '</div>' +
-          '<div class="amt-inp">' +
+          '<div class="val">' +
             '<input class="amt" data-uid="' + m.uid + '" inputmode="numeric" value="' + amtVal + '"' + (isOn ? '' : ' disabled') + '>' +
-            '<span class="cur">' + esc(App.settings?.currency || 'SEK') + '</span>' +
+            '<span class="u">' + (mode === 'pct' ? '%' : (App.settings?.currency || 'SEK')) + '</span>' +
           '</div>' +
-          '<div class="toggle' + (isOn ? ' on' : '') + '">' + (isOn ? '✓' : '') + '</div>';
+          '<div class="toggle' + (isOn ? ' on' : '') + '" style="width:24px;height:24px;border-radius:12px;border:1.5px solid var(--track);display:flex;align-items:center;justify-content:center;color:' + (isOn ? '#fff' : 'transparent') + ';background:' + (isOn ? 'var(--green)' : 'transparent') + ';font-weight:800;font-size:12px;cursor:pointer;">' + (isOn ? '✓' : '') + '</div>';
 
         row.querySelector('.toggle').onclick = () => {
           if (editing.tagUids.includes(m.uid)) editing.tagUids = editing.tagUids.filter(u => u !== m.uid);
           else editing.tagUids.push(m.uid);
           renderSplits();
         };
-
+        row.querySelectorAll('.seg button').forEach(b => {
+          b.onclick = () => {
+            editing.splitMode[m.uid] = b.dataset.mode;
+            renderSplits();
+          };
+        });
         const amtInp = row.querySelector('input.amt');
         if (isOn) {
           amtInp.addEventListener('input', () => {
             editing.amountsByUid[m.uid] = Number(amtInp.value) || 0;
           });
         }
-        catSection.appendChild(row);
+        splitContainer.appendChild(row);
       });
     }
     renderSplits();
@@ -2511,15 +2484,18 @@ function openCategoryEditor(cat) {
       });
 
       const data = {
-        name, limit, icon: editing.icon || '🏷️', colorKey: editing.colorKey || 'blue',
+        name, limit,
+        icon: editing.icon || '🏷️',
+        colorKey: editing.colorKey || 'blue',
         parentId: editing.parentId || '',
         tagUids: editing.tagUids,
         amountsByUid: cleanAmounts,
-        splitMethod: editing.splitMethod
+        splitMode: editing.splitMode
       };
       closeSheet();
       if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
+      if (App.screen === 'categories' || App.screen === 'home') renderScreen(App.screen);
     };
     footer.appendChild(save);
 
@@ -2535,7 +2511,7 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* COLOR / ICON PICKERS with working Save */
+/* PICKERS — Save button inside picker works */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -2566,10 +2542,7 @@ function openColorPickerWithSave(current, onPick) {
     const saveBtn = document.createElement('button');
     saveBtn.className = 'primary';
     saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => {
-      onPick(selected);
-      closeSheet();
-    };
+    saveBtn.onclick = () => { onPick(selected); closeSheet(); };
     footer.appendChild(saveBtn);
   });
 }
@@ -2660,7 +2633,7 @@ function openIconPickerWithSave(current, onPick) {
   });
 }
 
-/* TONE PICKER */
+/* TONE */
 const TONES = [
   { key: 'sunset', name: 'Sunset', a: '#ff512f', b: '#f09819' }, { key: 'ambersky', name: 'Amber Sky', a: '#f12711', b: '#f5af19' },
   { key: 'coral', name: 'Coral', a: '#ff6b6b', b: '#ee5a24' }, { key: 'cherry', name: 'Cherry', a: '#eb3349', b: '#f45c43' },
