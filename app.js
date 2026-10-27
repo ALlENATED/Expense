@@ -674,6 +674,22 @@ ScreenRenderers.home = function () {
       const pctRaw = limit > 0 ? Math.round((spent / limit) * 100) : 0;
       const pct = Math.min(100, pctRaw);
 
+      // Per-person pills inside pinned card
+      let pinTagsHtml = '';
+      const tagUids = c.tagUids || [];
+      const amountsByUid = c.amountsByUid || {};
+      if (tagUids.length > 0) {
+        pinTagsHtml = '<div class="pin-tags">' + tagUids.map(uid => {
+          const av = getAvatarHtml(uid, '14px');
+          const amt = Number(amountsByUid[uid]) || 0;
+          if (amt > 0) {
+            return '<span class="ppl-badge-inline" style="font-size:10px;padding:1px 8px 1px 1px;gap:4px;">' +
+              av + fmtAmount(amt) + '</span>';
+          }
+          return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
+        }).join('') + '</div>';
+      }
+
       const el = document.createElement('div');
       el.className = 'pin c-' + (c.colorKey || 'blue') + (over ? ' over' : '');
       el.innerHTML =
@@ -686,7 +702,8 @@ ScreenRenderers.home = function () {
         '<div class="bar-row">' +
           '<div class="bar-in"><div style="width:' + pct + '%"></div></div>' +
           '<div class="bar-pct">' + pctRaw + '%</div>' +
-        '</div>';
+        '</div>' +
+        pinTagsHtml;
       el.onclick = () => openCategoryEditor(c);
       grid.appendChild(el);
     });
@@ -796,6 +813,21 @@ ScreenRenderers.categories = function () {
       const isPinned = myPins.includes(cat.id);
       const pinHtml = isPinned ? '<span class="pin-icon">📌</span>' : '';
 
+      // Tag pills (avatar + amount, inline next to name)
+      let catTagsHtml = '';
+      const tagUids = cat.tagUids || [];
+      const amountsByUid = cat.amountsByUid || {};
+      if (tagUids.length > 0) {
+        catTagsHtml = '<span class="cat-tags">' + tagUids.map(uid => {
+          const av = getAvatarHtml(uid, '20px');
+          const amt = Number(amountsByUid[uid]) || 0;
+          if (amt > 0) {
+            return '<span class="ppl-badge-inline">' + av + fmtAmount(amt) + '</span>';
+          }
+          return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
+        }).join('') + '</span>';
+      }
+
       const card = document.createElement('div');
       card.className = 'cat c-' + (cat.colorKey || 'blue') + (over ? ' over' : '');
       card.innerHTML =
@@ -805,6 +837,7 @@ ScreenRenderers.categories = function () {
             '<div class="cat-name-wrap">' +
               '<span class="cat-name">' + esc(cat.name) + '</span>' +
               pinHtml +
+              catTagsHtml +
             '</div>' +
             '<div class="cat-right">' +
               '<span class="cat-amt"><b>' + fmtAmount(spent) + '</b> / ' + fmtAmount(limit) + '</span>' +
@@ -825,7 +858,7 @@ ScreenRenderers.categories = function () {
   return wrap;
 };
 
-/* BUY — layout 2 */
+/* BUY */
 ScreenRenderers.buy = function () {
   const s = App.settings || DEFAULT_SETTINGS;
   const lists = s.buyLists || [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }];
@@ -955,7 +988,7 @@ async function deleteBuyList(l) {
   toast('List deleted');
 }
 
-/* Buy list editor — tappable icon/color with sub-sheet pickers + floating Save */
+/* Buy list editor — FIX: sub-sheet pickers with working Save */
 function openListMenu(l) {
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + esc(l.name) + '</h3>';
@@ -980,7 +1013,8 @@ function openListMenu(l) {
     body.appendChild(iconF);
     iconF.onclick = () => openIconPickerWithSave(editing.icon, (emoji) => {
       editing.icon = emoji;
-      document.getElementById('lm-icon-val').textContent = emoji;
+      const el = document.getElementById('lm-icon-val');
+      if (el) el.textContent = emoji;
     });
 
     const colorF = document.createElement('div');
@@ -1043,7 +1077,8 @@ function openNewListEditor() {
     body.appendChild(iconF);
     iconF.onclick = () => openIconPickerWithSave(editing.icon, (emoji) => {
       editing.icon = emoji;
-      document.getElementById('nl-icon-val').textContent = emoji;
+      const el = document.getElementById('nl-icon-val');
+      if (el) el.textContent = emoji;
     });
 
     const colorF = document.createElement('div');
@@ -1159,18 +1194,19 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
+      // Pills — no-amt variant when no amount (compact, no pill bg)
       let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
       if (tagUids.length > 0) {
         badgesHtml = tagUids.map(uid => {
-          const av = getAvatarHtml(uid, '16px');
+          const av = getAvatarHtml(uid, '20px');
           const rawAmt = amountsByUid[uid];
           const hasAmt = rawAmt != null && rawAmt !== '' && Number(rawAmt) > 0;
           if (hasAmt) {
             return '<span class="ppl-badge-inline">' + av + fmtAmount(rawAmt) + '</span>';
           }
-          return '<span class="ppl-badge-inline">' + getAvatarHtml(uid, '16px') + '</span>';
+          return '<span class="ppl-badge-inline no-amt">' + av + '</span>';
         }).join('');
       }
 
@@ -1354,7 +1390,6 @@ function computeGoalCurrent(g) {
   return Number(g.current) || 0;
 }
 
-// Compute the current user's actual savings this month (for goal funding logic)
 function computeMyActualSavings() {
   const us = App.userSettings || DEFAULT_USER_SETTINGS;
   const s = App.settings || DEFAULT_SETTINGS;
@@ -1364,8 +1399,6 @@ function computeMyActualSavings() {
     .filter(e => e.periodKey === period.key)
     .reduce((a, e) => a + Number(e.amount || 0), 0);
   const totalBudget = Number(s.totalBudget) || 0;
-
-  // My budget + To Pay outflow
   const myBudget = us.budgetMethod === 'pct'
     ? totalBudget * (Number(us.budgetPct) / 100)
     : Number(us.budgetFixed) || 0;
@@ -1373,19 +1406,14 @@ function computeMyActualSavings() {
   const myToPay = us.toPayMethod === 'pct'
     ? unpaidToPay.reduce((a, x) => a + Number(x.amount || 0), 0) * (Number(us.toPayPct) / 100)
     : Number(us.toPayFixed) || 0;
-
-  // Leftover share (proportional to my %)
   const leftover = totalBudget - totalSpent;
   const mySharePct = us.budgetMethod === 'pct'
     ? (Number(us.budgetPct) / 100)
     : (totalBudget > 0 ? (Number(us.budgetFixed) || 0) / totalBudget : 0);
   const myLeftoverShare = leftover * mySharePct;
-
-  // Savings BEFORE goal contributions
   return Number(us.salary) - myBudget - myToPay + myLeftoverShare;
 }
 
-// Determine whether a specific member's goals can be funded this month
 function canFundGoalForMember(uid, monthlyAmount, savingsBeforeGoals) {
   if (!monthlyAmount || monthlyAmount <= 0) return false;
   return savingsBeforeGoals >= monthlyAmount;
@@ -1398,7 +1426,6 @@ ScreenRenderers.saved = function () {
   const lastPeriod = computePreviousPeriod(period);
   const myUid = App.user?.uid;
 
-  // Total household savings = sum over history of per-member actual savings
   let totalSaved = 0;
   let hasTracked = false;
   App.history.forEach(h => {
@@ -1421,10 +1448,6 @@ ScreenRenderers.saved = function () {
   }
   const lastMonthLabel = MONTHS_LONG[parseLocalDate(lastPeriod.key + '-01').getMonth()];
 
-  // Compute current savings for goal-funding check
-  const mySavingsBeforeGoals = computeMyActualSavings();
-
-  // Compute per-member savings for others (approx. same formula for each)
   const memberSavingsBeforeGoals = {};
   Object.keys(s.members || {}).forEach(uid => {
     const member = s.members[uid];
@@ -1490,7 +1513,6 @@ ScreenRenderers.saved = function () {
       const tagUids = g.tagUids || [];
       const monthlySplit = g.monthlySplit || {};
 
-      // Determine per-member pause state
       const memberStatus = {};
       let anyPaused = false;
       tagUids.forEach(uid => {
@@ -1500,13 +1522,11 @@ ScreenRenderers.saved = function () {
         if (!canFund) anyPaused = true;
       });
 
-      // Badge state
       const badgeClass = anyPaused ? 'goal-badge paused' : 'goal-badge';
       const badgeInner = anyPaused
         ? '<span class="pause-2" style="width:10px;height:10px;"><span style="width:2.5px;height:7px;"></span><span style="width:2.5px;height:7px;"></span></span>Paused'
         : 'On Track';
 
-      // Build pills
       let pillsHtml = '';
       if (tagUids.length > 0) {
         const sortedUids = tagUids.slice().sort((a, b) => {
@@ -1515,7 +1535,7 @@ ScreenRenderers.saved = function () {
           return 0;
         });
         pillsHtml = sortedUids.map(uid => {
-          const av = getAvatarHtml(uid, '16px');
+          const av = getAvatarHtml(uid, '20px');
           const st = memberStatus[uid];
           if (!st.canFund) {
             return '<span class="ppl-badge-inline">' + av +
@@ -1526,7 +1546,6 @@ ScreenRenderers.saved = function () {
         }).join('');
       }
 
-      // Footer pill — current user's monthly amount (only if tagged)
       let footerPill = '';
       if (tagUids.includes(myUid)) {
         const myStatus = memberStatus[myUid];
@@ -1605,7 +1624,6 @@ ScreenRenderers.settings = function () {
   const wrap = document.createElement('div');
   wrap.appendChild(makeAppHead('Tune things,', 'Settings'));
 
-  // Profile
   wrap.appendChild(sectionTitle('Profile'));
   const pg = group();
   const arow = document.createElement('div');
@@ -1624,14 +1642,12 @@ ScreenRenderers.settings = function () {
   pg.appendChild(arow);
   wrap.appendChild(pg);
 
-  // General
   wrap.appendChild(sectionTitle('General'));
   const gg = group();
   gg.appendChild(rowInput('Total budget', 'set-totalbudget', s.totalBudget || 0));
   gg.appendChild(rowInput('Period start day', 'set-startday', s.periodStartDay || 25));
   wrap.appendChild(gg);
 
-  // My Finances
   wrap.appendChild(sectionTitle('My Finances'));
   const mg = group();
   mg.appendChild(rowInput('My Salary', 'set-salary', us.salary || 0));
@@ -1674,7 +1690,6 @@ ScreenRenderers.settings = function () {
   }));
   wrap.appendChild(mg);
 
-  // Appearance
   wrap.appendChild(sectionTitle('Appearance'));
   const appear = group();
   const themeRow = document.createElement('div');
@@ -1713,7 +1728,6 @@ ScreenRenderers.settings = function () {
   });
   wrap.appendChild(appear);
 
-  // Reset
   wrap.appendChild(sectionTitle('Reset'));
   const reset = group();
   const topayDayRow = document.createElement('div');
@@ -1730,7 +1744,6 @@ ScreenRenderers.settings = function () {
   reset.appendChild(runRow);
   wrap.appendChild(reset);
 
-  // Members & Safety
   wrap.appendChild(sectionTitle('Members & Safety'));
   const memberGroup = group();
   const bannedUids = s.bannedUids || [];
@@ -1780,7 +1793,6 @@ ScreenRenderers.settings = function () {
   }
   wrap.appendChild(memberGroup);
 
-  // Account
   wrap.appendChild(sectionTitle('Account'));
   const acct = group();
   const emailRow = document.createElement('div');
@@ -1802,7 +1814,6 @@ ScreenRenderers.settings = function () {
   acct.appendChild(importRow);
   wrap.appendChild(acct);
 
-  // Danger Zone
   wrap.appendChild(sectionTitle('Danger Zone'));
   const dz = group();
   const resetRow = document.createElement('div');
@@ -1949,7 +1960,6 @@ function confirmKickMember(uid, m) {
   if (!bannedUids.includes(uid)) bannedUids.push(uid);
   FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been kicked'));
 }
-
 function confirmUnbanMember(uid, m) {
   const name = m.name || m.email || uid;
   if (!confirm('Unban "' + name + '"?\n\nThey will be able to sign in and access the shared budget again.')) return;
@@ -1957,7 +1967,6 @@ function confirmUnbanMember(uid, m) {
   const bannedUids = (s.bannedUids || []).filter(u => u !== uid);
   FB.updateDoc(budgetDoc(), { bannedUids }).then(() => toast(name + ' has been unbanned'));
 }
-
 function confirmDeleteMemberData(uid, m) {
   const name = m.name || m.email || uid;
   openSheet((body, footer) => {
@@ -1970,14 +1979,6 @@ function confirmDeleteMemberData(uid, m) {
           '<input type="checkbox" id="dm-kick">' +
           '<span>Also kick from household (adds them to the banned list)</span>' +
         '</label>' +
-        '<div style="font-size:11.5px;color:var(--text2);line-height:1.6;padding:10px 12px;background:var(--bg);border-radius:10px;">' +
-          '<div><b>Will be deleted:</b></div>' +
-          '<div>· Profile (name, email, avatar)</div>' +
-          '<div>· Preferences (theme, tone, salary, budget settings)</div>' +
-          '<div>· Household membership</div>' +
-          '<div style="margin-top:6px;"><b>Will stay:</b></div>' +
-          '<div>· Payments, expenses, goals they created</div>' +
-        '</div>' +
       '</div>';
 
     footer.innerHTML = '';
@@ -2008,7 +2009,6 @@ function confirmDeleteMemberData(uid, m) {
     footer.appendChild(delBtn);
   });
 }
-
 function confirmClearBanned() {
   const s = App.settings || DEFAULT_SETTINGS;
   const bannedUids = s.bannedUids || [];
@@ -2155,7 +2155,6 @@ function showGoalSheet(g, isNew) {
 
     let activeUid = editing.tagUids.includes(myUid) ? myUid : (editing.tagUids[0] || myUid);
 
-    // Goal editor header: icon left, name right
     const header = document.createElement('div');
     header.className = 'goal-editor-header';
     const iconBtn = document.createElement('div');
@@ -2176,7 +2175,6 @@ function showGoalSheet(g, isNew) {
     header.appendChild(titleInput);
     body.appendChild(header);
 
-    // Who is this goal for — Option 1 segmented
     const whoRow = document.createElement('div');
     whoRow.className = 'who-row';
     body.appendChild(whoRow);
@@ -2230,7 +2228,6 @@ function showGoalSheet(g, isNew) {
       whoRow.appendChild(segEl);
     }
 
-    // Date + accent
     const dateRow = document.createElement('div');
     dateRow.className = 'v4-row';
     dateRow.innerHTML = '<label>Target Date</label>' +
@@ -2248,7 +2245,6 @@ function showGoalSheet(g, isNew) {
       colorRow.querySelector('.swatch').className = 'swatch c-' + key;
     });
 
-    // H5 hero + tabs + inputs
     const h5Container = document.createElement('div');
     body.appendChild(h5Container);
 
@@ -2370,11 +2366,23 @@ function showGoalSheet(g, isNew) {
   });
 }
 
-/* CATEGORY EDITOR */
+/* CATEGORY EDITOR — with tags & splits */
 function openCategoryEditor(cat) {
   const isNew = !cat;
-  const editing = cat ? Object.assign({}, cat) : { name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '' };
+  const editing = cat ? Object.assign({}, cat) : {
+    name: '', icon: '🏷️', limit: 0, colorKey: 'blue', parentId: '',
+    tagUids: [], amountsByUid: {}, splitMethod: 'fixed'
+  };
   let pinState = (App.userSettings.pins || []).includes(editing.id);
+
+  // Migration: ensure tagUids/amountsByUid exist
+  if (!Array.isArray(editing.tagUids)) editing.tagUids = [];
+  if (!editing.amountsByUid) editing.amountsByUid = {};
+  if (!editing.splitMethod) editing.splitMethod = 'fixed';
+
+  const members = Object.keys(App.settings?.members || {});
+  const myUid = App.user?.uid;
+  const memberList = members.map(uid => ({ uid, name: displayName(uid), isMe: uid === myUid }));
 
   openSheet((body, footer) => {
     body.innerHTML = '<h3>' + (isNew ? 'New category' : 'Edit category') + '</h3>';
@@ -2421,7 +2429,8 @@ function openCategoryEditor(cat) {
     body.appendChild(iconF);
     iconF.onclick = () => openIconPickerWithSave(editing.icon || '🏷️', (emoji) => {
       editing.icon = emoji;
-      document.getElementById('ce-icon-val').textContent = emoji;
+      const el = document.getElementById('ce-icon-val');
+      if (el) el.textContent = emoji;
     });
 
     const colorF = document.createElement('div');
@@ -2437,6 +2446,56 @@ function openCategoryEditor(cat) {
       colorF.className = 'field clickable c-' + key;
     });
 
+    // Who pays section
+    const catSection = document.createElement('div');
+    catSection.className = 'cat-split-section';
+    body.appendChild(catSection);
+
+    function renderSplits() {
+      catSection.innerHTML = '';
+
+      const secHead = document.createElement('div');
+      secHead.className = 'sec-head';
+      secHead.innerHTML =
+        '<div class="lbl">Who pays for this category?</div>' +
+        '<div class="tot">Tagged: ' + editing.tagUids.length + '</div>';
+      catSection.appendChild(secHead);
+
+      memberList.forEach(m => {
+        const isOn = editing.tagUids.includes(m.uid);
+        const amtVal = editing.amountsByUid[m.uid] != null ? editing.amountsByUid[m.uid] : '';
+        const row = document.createElement('div');
+        row.className = 'pp-row';
+        row.style.opacity = isOn ? '1' : '0.45';
+        row.innerHTML =
+          getAvatarHtml(m.uid, '36px') +
+          '<div class="info">' +
+            '<div class="nm">' + esc(m.name) + '</div>' +
+            '<div class="sub">' + (m.isMe ? 'Your share' : 'Their share') + '</div>' +
+          '</div>' +
+          '<div class="amt-inp">' +
+            '<input class="amt" data-uid="' + m.uid + '" inputmode="numeric" value="' + amtVal + '"' + (isOn ? '' : ' disabled') + '>' +
+            '<span class="cur">' + esc(App.settings?.currency || 'SEK') + '</span>' +
+          '</div>' +
+          '<div class="toggle' + (isOn ? ' on' : '') + '">' + (isOn ? '✓' : '') + '</div>';
+
+        row.querySelector('.toggle').onclick = () => {
+          if (editing.tagUids.includes(m.uid)) editing.tagUids = editing.tagUids.filter(u => u !== m.uid);
+          else editing.tagUids.push(m.uid);
+          renderSplits();
+        };
+
+        const amtInp = row.querySelector('input.amt');
+        if (isOn) {
+          amtInp.addEventListener('input', () => {
+            editing.amountsByUid[m.uid] = Number(amtInp.value) || 0;
+          });
+        }
+        catSection.appendChild(row);
+      });
+    }
+    renderSplits();
+
     footer.innerHTML = '';
     const save = document.createElement('button');
     save.className = 'primary';
@@ -2445,7 +2504,19 @@ function openCategoryEditor(cat) {
       const name = document.getElementById('ce-name').value.trim();
       if (!name) { toast('Name required'); return; }
       const limit = Number(document.getElementById('ce-limit').value) || 0;
-      const data = { name, limit, icon: editing.icon || '🏷️', colorKey: editing.colorKey || 'blue', parentId: editing.parentId || '' };
+
+      const cleanAmounts = {};
+      editing.tagUids.forEach(uid => {
+        cleanAmounts[uid] = Number(editing.amountsByUid[uid]) || 0;
+      });
+
+      const data = {
+        name, limit, icon: editing.icon || '🏷️', colorKey: editing.colorKey || 'blue',
+        parentId: editing.parentId || '',
+        tagUids: editing.tagUids,
+        amountsByUid: cleanAmounts,
+        splitMethod: editing.splitMethod
+      };
       closeSheet();
       if (isNew) await FB.addDoc(categoriesCol(), { ...data, createdAt: new Date().toISOString() });
       else await FB.updateDoc(FB.doc(categoriesCol(), cat.id), data);
@@ -2464,7 +2535,7 @@ function openCategoryEditor(cat) {
   });
 }
 
-/* COLOR / ICON PICKERS with floating Save */
+/* COLOR / ICON PICKERS with working Save */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -2636,7 +2707,6 @@ function openTonePicker(currentKey) {
     body.appendChild(grid);
   });
 }
-
 function openPillColorPicker(type) {
   openSheet((body) => {
     body.innerHTML = '<h3>Pick Pill Color</h3>';
@@ -2734,7 +2804,7 @@ function openExpenseEditor(expense, prefillName) {
   });
 }
 
-/* TO PAY EDITOR — multi-digit split inputs */
+/* TO PAY EDITOR */
 function openToPayEditor(item) {
   const isNew = !item;
   if (!item) item = {
@@ -2817,7 +2887,6 @@ function openToPayEditor(item) {
     }
 
     function updateSplitTotals() {
-      // Update only the totals + warn, do NOT re-render inputs
       const main = getPrimaryAmount();
       let total = 0;
       currentTagUids.forEach(uid => { total += Number(amountsByUid[uid]) || 0; });
@@ -2828,20 +2897,6 @@ function openToPayEditor(item) {
         secHead.innerHTML =
           'Assigned: <span style="color:' + (warn ? 'var(--red)' : 'var(--text)') + ';font-weight:600;">' + fmtAmount(total) + '</span> ' +
           '<span style="color:var(--text3);font-weight:500;">/ ' + (main != null ? fmtAmount(main) : '—') + '</span>';
-      }
-      // Warn block
-      let warnEl = tpSection.querySelector('.split-warn');
-      if (warn) {
-        if (!warnEl) {
-          warnEl = document.createElement('div');
-          warnEl.className = 'split-warn';
-          const eqBtn = tpSection.querySelector('.split-equal-btn');
-          if (eqBtn) tpSection.insertBefore(warnEl, eqBtn);
-          else tpSection.appendChild(warnEl);
-        }
-        warnEl.innerHTML = '<div class="icon">!</div><div>Assigned amounts don\'t match the total. Difference: <strong>' + fmtAmount(Math.abs(total - main)) + '</strong></div>';
-      } else if (warnEl) {
-        warnEl.remove();
       }
     }
 
@@ -3072,7 +3127,7 @@ function labelForDay(iso) {
   return full;
 }
 
-/* RESET DAY / RUN RESET / AUTO-CONTRIBUTIONS */
+/* RESET */
 function openResetDayPicker() {
   const s = App.settings || DEFAULT_SETTINGS;
   let mode = (s.toPayResetDay === 'last' || s.toPayResetDay == null) ? 'last' : 'specific';
@@ -3189,7 +3244,6 @@ async function maybeAutoReset() {
 }
 async function applyGoalAutoContributions(monthKey) {
   if (!App.goals || App.goals.length === 0) return;
-  // First compute per-member savings before goals
   const memberSavingsBeforeGoals = {};
   const period = computeCurrentPeriod((App.settings || DEFAULT_SETTINGS).periodStartDay);
   const totalSpent = App.expenses
@@ -3223,20 +3277,15 @@ async function applyGoalAutoContributions(monthKey) {
       await FB.updateDoc(FB.doc(goalsCol(), g.id), { lastContributionMonth: monthKey });
       continue;
     }
-
-    // ALL-OR-NOTHING: fund the goal only if EVERY tagged member has enough in their savings
     const canFundAll = tagUids.every(uid => {
       const monthly = Number(monthlySplit[uid]) || 0;
       if (monthly <= 0) return true;
       return (memberSavingsBeforeGoals[uid] || 0) >= monthly;
     });
-
     if (!canFundAll) {
       await FB.updateDoc(FB.doc(goalsCol(), g.id), { lastContributionMonth: monthKey });
       continue;
     }
-
-    // Fund goal for each member
     const updates = { lastContributionMonth: monthKey };
     const newCurrentByUid = { ...(g.currentByUid || {}) };
     tagUids.forEach(uid => {
@@ -3245,10 +3294,8 @@ async function applyGoalAutoContributions(monthKey) {
     });
     updates.currentByUid = newCurrentByUid;
     updates.current = Object.values(newCurrentByUid).reduce((a, v) => a + (Number(v) || 0), 0);
-
-    try {
-      await FB.updateDoc(FB.doc(goalsCol(), g.id), updates);
-    } catch (e) { console.error('goal auto contribution:', e); }
+    try { await FB.updateDoc(FB.doc(goalsCol(), g.id), updates); }
+    catch (e) { console.error('goal auto contribution:', e); }
   }
 }
 
@@ -3274,27 +3321,23 @@ function importData() {
       try {
         const data = JSON.parse(ev.target.result);
         if (!confirm('This will OVERWRITE your current data. Are you sure?')) return;
-
         for (const c of App.expenses) await FB.deleteDoc(FB.doc(expensesCol(), c.id));
         for (const c of App.toPay) await FB.deleteDoc(FB.doc(toPayCol(), c.id));
         for (const c of App.buy) await FB.deleteDoc(FB.doc(buyCol(), c.id));
         for (const c of App.goals) await FB.deleteDoc(FB.doc(goalsCol(), c.id));
         for (const c of App.history) await FB.deleteDoc(FB.doc(historyCol(), c.id));
         for (const c of App.categories) await FB.deleteDoc(FB.doc(categoriesCol(), c.id));
-
         const preserved = {
           owners: (App.settings && App.settings.owners) || [],
           bannedUids: (App.settings && App.settings.bannedUids) || []
         };
         await FB.setDoc(budgetDoc(), { ...(data.settings || {}), ...preserved });
-
         for (const c of (data.categories || [])) await FB.setDoc(FB.doc(categoriesCol(), c.id), c);
         for (const c of (data.expenses || []))   await FB.setDoc(FB.doc(expensesCol(), c.id), c);
         for (const c of (data.toPay || []))      await FB.setDoc(FB.doc(toPayCol(), c.id), c);
         for (const c of (data.buy || []))        await FB.setDoc(FB.doc(buyCol(), c.id), c);
         for (const c of (data.goals || []))      await FB.setDoc(FB.doc(goalsCol(), c.id), c);
         for (const c of (data.history || []))    await FB.setDoc(FB.doc(historyCol(), c.id), c);
-
         toast('Data restored successfully');
         setTimeout(() => window.location.reload(), 1500);
       } catch (err) { toast('Import failed: Invalid file'); }
@@ -3333,7 +3376,6 @@ async function confirmHardReset() {
   } catch (e) { toast('Reset failed: ' + e.message); }
 }
 
-/* INPUT FOCUS BEHAVIOR — select all on focus, restore on blur if empty */
 document.addEventListener('focusin', (e) => {
   if (e.target.matches('input[type="text"], input[type="number"], input:not([type])')) {
     requestAnimationFrame(() => {
