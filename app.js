@@ -236,12 +236,18 @@ async function startApp() {
 
   try { await FB.auth.currentUser?.getIdToken(); } catch (e) {}
 
-  attachListeners();
-  mountScreens();
-  renderTabbar();
-  goScreen('home');
-  const loadingEl = document.getElementById('loading');
-  if (loadingEl) loadingEl.classList.add('hidden');
+  try {
+    attachListeners();
+    mountScreens();
+    renderTabbar();
+    goScreen('home');
+  } catch (e) {
+    console.error('post-auth init failed:', e);
+    toast('Startup error: ' + (e.message || e));
+  } finally {
+    const loadingEl = document.getElementById('loading');
+    if (loadingEl) loadingEl.classList.add('hidden');
+  }
 }
 
 async function registerMember() {
@@ -456,6 +462,7 @@ function toast(message) {
   clearTimeout(App.toastTimer);
   App.toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
+
 let _paletteCache = null;
 function getColorVal(colorKey, variant) {
   if (!colorKey) return '';
@@ -502,15 +509,11 @@ function closeSheet() {
   setTimeout(() => { root.innerHTML = ''; }, 250);
 }
 
-/* In-sheet sub-view used by color & icon pickers.
-   The parent form stays intact underneath — we just overlay a sub-view
-   inside the same sheet, remove it when done. */
 function openSubView(title, buildFn) {
   const root = document.getElementById('sheet-root');
   const sheet = root && root.querySelector('.sheet');
   if (!sheet) return;
 
-  // Remove any existing sub-view
   const existing = sheet.querySelector('.picker-sub');
   if (existing) existing.remove();
 
@@ -548,9 +551,6 @@ function openSubView(title, buildFn) {
   buildFn(subBody, subFooter, closeSub, titleEl);
 }
 
-/* ============================================================
-   ICONS + PALETTE (defined before pickers use them)
-   ============================================================ */
 const PALETTE = [
   'blue','sky','azure','teal','mint','cyan','ocean','indigo','violet','lavender',
   'green','emerald','forest','pine','lime','jade','sage','seafoam','pistachio','olive',
@@ -1346,7 +1346,6 @@ function normalizeToPayItem(item) {
     tagUids = members.filter(u => u === myUid || u === otherUid);
     if (tagUids.length === 0) tagUids = members.slice(0, 2);
   }
-  // Persist the migration once so legacy docs become canonical.
   if (tagUids.length > 0 && item.id) {
     FB.updateDoc(FB.doc(toPayCol(), item.id), { tagUids })
       .catch(e => console.error('normalize tagUids:', e));
@@ -1407,10 +1406,10 @@ ScreenRenderers.topay = function () {
       const repTag = item.isRepeat ? '<span class="pill-rep">REP</span>' : '';
       const debtTag = item.isDebt ? '<span class="pill-debt">DEBT</span>' : '';
 
-           let badgesHtml = '';
+      let badgesHtml = '';
       const tagUids = item.tagUids || [];
       const amountsByUid = item.amountsByUid || {};
-          let typeCls = '';
+      let typeCls = '';
       if (item.isSubscription) typeCls = 'pill-type-sub';
       else if (item.isRepeat)  typeCls = 'pill-type-rep';
       else if (item.isDebt)    typeCls = 'pill-type-debt';
@@ -1420,9 +1419,7 @@ ScreenRenderers.topay = function () {
           const av = getAvatarHtml(uid, '20px');
           const rawAmt = amountsByUid[uid];
           const hasAmt = rawAmt != null && rawAmt !== '' && Number(rawAmt) > 0;
-          const cls = 'ppl-badge-inline'
-            + (hasAmt ? '' : ' no-amt')
-            + (typeCls ? ' ' + typeCls : '');
+          const cls = 'ppl-badge-inline' + (hasAmt ? '' : ' no-amt') + (typeCls ? ' ' + typeCls : '');
           return '<span class="' + cls + '">' + av + (hasAmt ? fmtAmount(rawAmt) : '') + '</span>';
         }).join('');
       }
@@ -1500,6 +1497,7 @@ ScreenRenderers.history = function () {
     wrap.appendChild(empty);
   } else {
     const showSaved = us.salary > 0 && us.trackSavings;
+    const currentKey = period.key;
     rows.forEach(r => {
       const budget = Number(r.budgetSnapshot) || 0;
       const spent  = Number(r.totalSpent) || 0;
@@ -1510,6 +1508,10 @@ ScreenRenderers.history = function () {
       if (showSaved) myShare = calculateMyShareForPeriod(r.periodKey, budget, us, spent);
       const mySaved = us.salary - myShare;
 
+      const deleteHtml = (r.periodKey === currentKey)
+        ? '<div class="delete-row" style="color:var(--text3);opacity:.6;cursor:default;">Current period · auto-managed</div>'
+        : '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month&rsquo;s record ›</div>';
+
       const card = document.createElement('div');
       card.className = 'hcard';
       card.innerHTML =
@@ -1518,16 +1520,16 @@ ScreenRenderers.history = function () {
         '<div class="row2">' +
           '<div class="cell"><div class="k">Budget</div><div class="v">' + fmtAmount(budget) + '</div></div>' +
           '<div class="cell"><div class="k">Total Expenses</div><div class="v' + (over ? ' over' : '') + '">' + fmtAmount(spent) + '</div></div>' +
-          (showSaved ?
-            '<div class="cell"><div class="k">My Share</div><div class="v">' + fmtAmount(myShare) + '</div></div>' +
-            '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
+          (showSaved
+            ? '<div class="cell"><div class="k">My Share</div><div class="v">' + fmtAmount(myShare) + '</div></div>' +
+              '<div class="cell"><div class="k">Saved</div><div class="v ' + (mySaved >= 0 ? 'saved' : 'deficit') + '">' + fmtAmount(mySaved) + '</div></div>'
             : '') +
         '</div>' +
-       '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
-        (r.periodKey === computeCurrentPeriod(s.periodStartDay).key
-          ? '<div class="delete-row" style="color:var(--text3);opacity:.6;cursor:default;">Current period · auto-managed</div>'
-          : '<div class="delete-row" data-delete="' + esc(r.id) + '" data-label="' + esc(r.periodLabel) + '">Delete this month\'s record ›</div>');
+        '<div class="bar"><div class="' + (over ? 'over' : 'ok') + '" style="width:' + pct + '%"></div></div>' +
+        deleteHtml;
       wrap.appendChild(card);
+    });
+  }
 
   setTimeout(() => {
     const prev = document.getElementById('hist-prev');
@@ -2186,7 +2188,7 @@ function confirmDeleteMemberData(uid, m) {
     delBtn.onclick = async () => {
       const alsoKick = document.getElementById('dm-kick').checked;
       closeSheet();
-      if (!confirm('Are you absolutely sure?\n\nThis will permanently delete "' + name + '"\'s personal data.\nThis cannot be undone.')) return;
+      if (!confirm('Are you absolutely sure?\n\nThis will permanently delete "' + name + '\'s personal data.\nThis cannot be undone.')) return;
       try {
         const s = App.settings || DEFAULT_SETTINGS;
         const members = { ...(s.members || {}) };
@@ -2341,9 +2343,10 @@ function showGoalSheet(g, isNew) {
       monthlySplit: {}
     };
 
-       const members = Object.keys(App.settings?.members || {});
+    const members = Object.keys(App.settings?.members || {});
     const myUid = App.user?.uid;
     if (!myUid) { toast('Session expired'); closeSheet(); return; }
+    const memberList = members.map(uid => ({ uid, name: displayName(uid), isMe: uid === myUid }));
 
     if (Object.keys(g.targetsByUid || {}).length > 0) editing.targetsByUid = { ...g.targetsByUid };
     else if (g.target && editing.tagUids.length > 0) {
@@ -2814,16 +2817,11 @@ function openPillColorPicker(type) {
       chip.className = 'color-chip c-' + key + (key === current ? ' on' : '');
       chip.onclick = async () => {
         const newPC = { ...(App.settings.pillColors || {}), [type]: key };
-
-        // Optimistic local update so the UI reflects the change immediately
         App.settings = { ...App.settings, pillColors: newPC };
         applyPillColors();
-
         closeSheet();
-
         try {
           await FB.updateDoc(budgetDoc(), { pillColors: newPC });
-          // Re-render settings so the swatch on the row shows the new color
           if (App.screen === 'settings') renderScreen('settings');
         } catch (e) {
           console.error('save pill color failed:', e);
@@ -3311,7 +3309,7 @@ function openResetDayPicker() {
   });
 }
 async function confirmRunReset() {
-  if (!confirm('...')) return;
+  if (!confirm('Run To Pay reset now?\n\n• One-time items from this month → deleted\n• Subscriptions → due date bumped +1 month, marked unpaid\n• Repeats → same, unless past their repeat-until date → deleted\n• Items with a future-month due date → untouched\n\nCannot be undone.')) return;
   const today = new Date();
   const resetKey = today.getFullYear() + '-' + pad2(today.getMonth() + 1);
   try {

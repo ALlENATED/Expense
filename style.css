@@ -482,11 +482,6 @@ input[type="number"]{-moz-appearance:textfield;}
 .prow.paid .pname{color:var(--text2);text-decoration:line-through;font-weight:500;}
 .prow.paid .pamt{color:var(--text2);opacity:.7;}
 
-.pill-sub,.pill-rep,.pill-debt{font-size:9px;font-weight:800;padding:2px 6px;border-radius:6px;letter-spacing:.4px;text-transform:uppercase;margin-left:4px;vertical-align:middle;}
-.pill-sub{background:var(--pill-sub-bg);color:var(--pill-sub-cl);}
-.pill-rep{background:var(--pill-rep-bg);color:var(--pill-rep-cl);}
-.pill-debt{background:var(--pill-debt-bg);color:var(--pill-debt-cl);}
-
 .ppl-badge-inline{
   display:inline-flex;align-items:center;gap:6px;
   background:var(--pill-bg);
@@ -500,13 +495,15 @@ input[type="number"]{-moz-appearance:textfield;}
 .ppl-badge-inline .av{width:20px;height:20px;font-size:9px;border:none;margin:0;flex-shrink:0;}
 .ppl-badge-inline.no-amt{padding:0;background:transparent;}
 .ppl-badge-inline.no-amt .av{width:20px;height:20px;font-size:9px;}
+
+/* Per-type pill colors — controlled from Settings → Appearance */
 .ppl-badge-inline.pill-type-sub  { background: var(--pill-sub-bg);  color: var(--pill-sub-cl); }
 .ppl-badge-inline.pill-type-rep  { background: var(--pill-rep-bg);  color: var(--pill-rep-cl); }
 .ppl-badge-inline.pill-type-debt { background: var(--pill-debt-bg); color: var(--pill-debt-cl); }
+
 .ppl-badge-inline.no-amt.pill-type-sub,
 .ppl-badge-inline.no-amt.pill-type-rep,
-.ppl-badge-inline.no-amt.pill-type-debt { background: transparent; color: inherit; 
-}
+.ppl-badge-inline.no-amt.pill-type-debt { background: transparent; color: inherit; }
 
 
 .pause-icon-plain{
