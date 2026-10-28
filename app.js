@@ -17,7 +17,8 @@ const DEFAULT_SETTINGS = {
   timezone: 'Europe/Stockholm',
   members: {}, lastResetKey: null, owners: [], bannedUids: [],
   pillColors: { sub: 'blue', rep: 'purple', debt: 'red' },
-  buyLists: [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }]
+  buyLists: [{ id: 'default', name: 'General', colorKey: 'blue', icon: '🛒' }],
+  customIcons: []
 };
 
 const DEFAULT_USER_SETTINGS = {
@@ -201,6 +202,7 @@ async function startApp() {
       if (!App.settings.owners) updates.owners = [App.user.uid];
       if (!App.settings.bannedUids) updates.bannedUids = [];
       if (!App.settings.pillColors) updates.pillColors = DEFAULT_SETTINGS.pillColors;
+      if (!App.settings.customIcons) updates.customIcons = [];
       if (App.settings.buyLists) {
         const migrated = App.settings.buyLists.map(l => ({
           id: l.id, name: l.name,
@@ -289,6 +291,7 @@ function attachListeners() {
     if (snap.exists()) {
       App.settings = snap.data();
       if (!App.settings.buyLists) App.settings.buyLists = DEFAULT_SETTINGS.buyLists;
+      if (!App.settings.customIcons) App.settings.customIcons = [];
       if (App.user && App.settings.members && App.settings.members[App.user.uid]) {
         App.userSettings = { ...DEFAULT_USER_SETTINGS, ...App.settings.members[App.user.uid] };
       } else {
@@ -485,7 +488,7 @@ function getColorVal(colorKey, variant) {
 }
 
 /* ============================================================
-   SHEETS — base sheet only. Pickers render as in-sheet sub-views.
+   SHEETS
    ============================================================ */
 function openSheet(builder) {
   const root = document.getElementById('sheet-root');
@@ -573,9 +576,10 @@ const ICONS = {
   'Misc': [['📱','phone'],['💻','laptop'],['🖥️','desktop'],['⌚','watch'],['📷','camera'],['🎒','backpack'],['🔑','key'],['🧩','puzzle'],['🧲','magnet'],['⚙️','gear'],['❓','question'],['⭐','star'],['🔔','bell'],['🌟','shine'],['💫','sparkle'],['🏷️','default']],
 };
 
+/* ---- Color picker ---- */
 function openColorPickerWithSave(current, onPick) {
   let selected = current;
-  openSubView('Pick a color', (body, footer, close, titleEl) => {
+  openSubView('Pick a color', (body, footer, close) => {
     body.innerHTML = '';
     const grid = document.createElement('div');
     grid.className = 'palette-grid';
@@ -601,12 +605,22 @@ function openColorPickerWithSave(current, onPick) {
   });
 }
 
+/* ---- Icon picker (with custom icons + searchable keywords) ---- */
 function openIconPickerWithSave(current, onPick) {
   let selected = current;
-  openSubView('Pick an icon', (body, footer, close, titleEl) => {
+  openSubView('Pick an icon', (body, footer, close) => {
     body.innerHTML = '';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.minHeight = '0';
+
     const wrap = document.createElement('div');
     wrap.className = 'icon-picker';
+    wrap.style.marginBottom = '0';
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.flex = '1';
+    wrap.style.minHeight = '0';
 
     const search = document.createElement('input');
     search.className = 'icon-search';
@@ -614,12 +628,23 @@ function openIconPickerWithSave(current, onPick) {
     wrap.appendChild(search);
 
     const scroll = document.createElement('div');
+    scroll.style.flex = '1';
+    scroll.style.overflowY = 'auto';
+    scroll.style.minHeight = '0';
+
+    function allIcons() {
+      const customs = (App.settings?.customIcons || []).map(c => [c.emoji, (c.keywords || []).join(' ')]);
+      const groups = { ...ICONS };
+      if (customs.length) groups['My Icons'] = customs;
+      return groups;
+    }
+
     function render(q) {
       scroll.innerHTML = '';
       const query = (q || '').toLowerCase().trim();
       let any = false;
-      Object.entries(ICONS).forEach(([cat, list]) => {
-        const matches = list.filter(([e, k]) => !query || k.includes(query) || e.includes(query));
+      Object.entries(allIcons()).forEach(([cat, list]) => {
+        const matches = list.filter(([e, k]) => !query || k.toLowerCase().includes(query) || e.includes(query));
         if (!matches.length) return;
         any = true;
         const label = document.createElement('div');
@@ -648,19 +673,37 @@ function openIconPickerWithSave(current, onPick) {
         scroll.appendChild(empty);
       }
     }
+
+    const addRow = document.createElement('div');
+    addRow.className = 'custom-emoji-wrap';
+    addRow.innerHTML =
+      '<input placeholder="Paste emoji, then keywords (comma separated)…" style="flex:2">' +
+      '<button>Add</button>';
+    const ci = addRow.querySelector('input');
+    const cb = addRow.querySelector('button');
+    cb.onclick = async () => {
+      const raw = ci.value.trim();
+      if (!raw) return;
+      const parts = raw.split(/\s+/);
+      const emoji = parts[0];
+      const keywordStr = raw.slice(emoji.length).trim();
+      const keywords = keywordStr ? keywordStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+      if (!emoji) return;
+      const list = (App.settings.customIcons || []).slice();
+      if (list.some(c => c.emoji === emoji)) { toast('Already added'); return; }
+      list.push({ emoji, keywords });
+      ci.value = '';
+      try {
+        await FB.updateDoc(budgetDoc(), { customIcons: list });
+        toast('Icon added');
+        render(search.value);
+      } catch (e) { toast('Save failed'); }
+    };
+    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); cb.click(); } };
     search.oninput = () => render(search.value);
+
     wrap.appendChild(scroll);
-
-    const custom = document.createElement('div');
-    custom.className = 'custom-emoji-wrap';
-    custom.innerHTML = '<input placeholder="Or paste any emoji →" maxlength="4"><button>Use</button>';
-    const ci = custom.querySelector('input');
-    const cb = custom.querySelector('button');
-    const commit = () => { const v = ci.value.trim(); if (!v) return; selected = v; ci.value = ''; };
-    cb.onclick = commit;
-    ci.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
-    wrap.appendChild(custom);
-
+    wrap.appendChild(addRow);
     body.appendChild(wrap);
 
     footer.innerHTML = '';
@@ -670,6 +713,60 @@ function openIconPickerWithSave(current, onPick) {
     saveBtn.onclick = () => { onPick(selected); close(); };
     footer.appendChild(saveBtn);
     render('');
+  });
+}
+
+function openCustomIconManager() {
+  openSheet((body, footer) => {
+    body.innerHTML = '<h3>Custom Icons</h3>';
+    const list = (App.settings.customIcons || []).slice();
+    if (!list.length) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.style.textAlign = 'center';
+      hint.style.padding = '20px';
+      hint.textContent = 'No custom icons yet. Add one from any icon picker.';
+      body.appendChild(hint);
+    } else {
+      list.forEach((c, idx) => {
+        const row = document.createElement('div');
+        row.className = 'field';
+        row.style.cursor = 'default';
+        row.innerHTML =
+          '<div style="display:flex;align-items:center;gap:10px;flex:1;">' +
+            '<span style="font-size:22px;">' + esc(c.emoji) + '</span>' +
+            '<input data-idx="' + idx + '" value="' + esc((c.keywords || []).join(', ')) + '" style="flex:1;text-align:left;font-size:13px;" placeholder="keywords, comma separated">' +
+          '</div>' +
+          '<button data-del="' + idx + '" style="width:auto;margin:0;padding:6px 12px;font-size:12px;color:var(--red);background:transparent;border:none;font-weight:700;cursor:pointer;">Del</button>';
+        body.appendChild(row);
+      });
+    }
+    footer.innerHTML = '';
+    const done = document.createElement('button');
+    done.className = 'primary';
+    done.textContent = 'Done';
+    done.onclick = async () => {
+      const inputs = body.querySelectorAll('input[data-idx]');
+      const newList = (App.settings.customIcons || []).slice();
+      inputs.forEach(inp => {
+        const i = Number(inp.dataset.idx);
+        newList[i].keywords = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+      });
+      await FB.updateDoc(budgetDoc(), { customIcons: newList });
+      closeSheet();
+      toast('Icons updated');
+    };
+    footer.appendChild(done);
+
+    body.querySelectorAll('[data-del]').forEach(b => {
+      b.onclick = async () => {
+        const i = Number(b.dataset.del);
+        const newList = (App.settings.customIcons || []).filter((_, k) => k !== i);
+        await FB.updateDoc(budgetDoc(), { customIcons: newList });
+        closeSheet();
+        openCustomIconManager();
+      };
+    });
   });
 }
 
@@ -1151,13 +1248,23 @@ ScreenRenderers.buy = function () {
         const v = inp.value.trim();
         if (!v) return;
         inp.value = '';
-        await FB.addDoc(buyCol(), {
-          name: v, checked: false, listId: currentListId,
-          createdAt: new Date().toISOString(), checkedAt: null,
-        });
+        inp.focus();
+        try {
+          await FB.addDoc(buyCol(), {
+            name: v, checked: false, listId: currentListId,
+            createdAt: new Date().toISOString(), checkedAt: null,
+          });
+        } finally {
+          requestAnimationFrame(() => {
+            const again = document.getElementById('buy-input');
+            if (again) again.focus();
+          });
+        }
       };
       addBtn.onclick = add;
-      inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') add(); });
+      inp.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); add(); }
+      });
     }
     const cc = document.getElementById('buy-clear-checked');
     if (cc) cc.onclick = async () => {
@@ -1920,6 +2027,12 @@ ScreenRenderers.settings = function () {
     row.onclick = () => openPillColorPicker(type);
     appear.appendChild(row);
   });
+
+  const manageIconsRow = document.createElement('div');
+  manageIconsRow.className = 'row';
+  manageIconsRow.innerHTML = '<span class="lbl">Custom Icons</span><span class="val">' + (s.customIcons || []).length + ' ›</span>';
+  manageIconsRow.onclick = () => openCustomIconManager();
+  appear.appendChild(manageIconsRow);
   wrap.appendChild(appear);
 
   wrap.appendChild(sectionTitle('Reset'));
@@ -2934,6 +3047,11 @@ function openToPayEditor(item) {
   const amountsByUid = { ...(item.amountsByUid || {}) };
   if (currentTagUids.length === 0) currentTagUids = [App.user.uid];
 
+  // If only one person is tagged, seed their amount to the total
+  if (currentTagUids.length === 1 && item.amount != null && amountsByUid[currentTagUids[0]] == null) {
+    amountsByUid[currentTagUids[0]] = Number(item.amount) || 0;
+  }
+
   const members = Object.keys(App.settings?.members || {});
   const memberList = members.map(uid => ({ uid, name: displayName(uid), isMe: uid === App.user.uid }));
 
@@ -3018,6 +3136,14 @@ function openToPayEditor(item) {
     function renderSplits() {
       tpSection.innerHTML = '';
 
+      // Single-tag auto-sync: keep the only tagged member equal to the total
+      if (currentTagUids.length === 1) {
+        const main = getPrimaryAmount();
+        if (main != null) {
+          amountsByUid[currentTagUids[0]] = main;
+        }
+      }
+
       const secHead = document.createElement('div');
       secHead.className = 'sec-head';
       const main = getPrimaryAmount();
@@ -3051,8 +3177,16 @@ function openToPayEditor(item) {
           '<div class="toggle' + (isOn ? ' on' : '') + '">' + (isOn ? '✓' : '') + '</div>';
 
         row.querySelector('.toggle').onclick = () => {
-          if (currentTagUids.includes(m.uid)) currentTagUids = currentTagUids.filter(u => u !== m.uid);
-          else currentTagUids.push(m.uid);
+          if (currentTagUids.includes(m.uid)) {
+            currentTagUids = currentTagUids.filter(u => u !== m.uid);
+            delete amountsByUid[m.uid];
+          } else {
+            currentTagUids.push(m.uid);
+            if (currentTagUids.length === 1) {
+              const mainNow = getPrimaryAmount();
+              if (mainNow != null) amountsByUid[m.uid] = mainNow;
+            }
+          }
           renderSplits();
         };
 
@@ -3077,9 +3211,9 @@ function openToPayEditor(item) {
       eqBtn.className = 'split-equal-btn';
       eqBtn.textContent = 'Split evenly';
       eqBtn.onclick = () => {
-        const main = getPrimaryAmount();
-        if (main == null || currentTagUids.length === 0) return;
-        const each = Math.round(main / currentTagUids.length);
+        const mainNow = getPrimaryAmount();
+        if (mainNow == null || currentTagUids.length === 0) return;
+        const each = Math.round(mainNow / currentTagUids.length);
         currentTagUids.forEach(uid => { amountsByUid[uid] = each; });
         renderSplits();
       };
@@ -3089,7 +3223,13 @@ function openToPayEditor(item) {
 
     setTimeout(() => {
       const amtInput = document.getElementById('tp-amt');
-      if (amtInput) amtInput.addEventListener('input', updateSplitTotals);
+      if (amtInput) amtInput.addEventListener('input', () => {
+        if (currentTagUids.length === 1) {
+          const main = getPrimaryAmount();
+          if (main != null) amountsByUid[currentTagUids[0]] = main;
+        }
+        renderSplits();
+      });
     }, 0);
 
     footer.innerHTML = '';
